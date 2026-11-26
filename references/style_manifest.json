@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "status": "owner-approved-reference-binary-pending",
+  "reference_path": "references/master_style.png",
+  "original_filename": "Aqua and Flame Evolution Line(1).png",
+  "sha256": "557aae7bfc8f0c3069de204bf7fb7fda1ae868d8380f64bcb308fbda17155976",
+  "width": 1447,
+  "height": 1087,
+  "mode": "RGBA",
+  "bytes": 2237482,
+  "alpha_range": [
+    0,
+    255
+  ],
+  "source": "Owner-supplied artwork in conversation; commercial rights not independently verified",
+  "require_exact_hash": true,
+  "art_bible": "docs/art-bible.md"
+}
