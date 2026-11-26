@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw
 import pytest
 
 from monster_creator.cli import main
+from monster_creator import pipeline, qa
 from monster_creator.pipeline import Workflow, json_bytes, read_json
 from monster_creator.qa import RUBRIC, VISUAL_CHECKS
 
@@ -175,3 +176,34 @@ def test_incremental_preparation_cannot_skip_workspace_pilot_boundary(workflow):
     assert workflow.resume("additional_family", 1)["requests"][0]["massAuthorizationRequired"] is True
     with pytest.raises(ValueError, match="Owner authorization"):
         workflow.request("additional_family", 1, None)
+
+
+def test_alpha_noise_recheck_retains_source_and_rejection_while_real_clip_fails(workflow, monkeypatch):
+    prepare(workflow, [family(), family(family_id="test_clipped")])
+    request = workflow.request("test_moth", 1, None)
+    source, receipt = provider_result(workflow, request, "green")
+    with Image.open(source) as image:
+        image.putpixel((0, 160), (240, 190, 10, 8))
+        image.save(source)
+    original = source.read_bytes()
+    with monkeypatch.context() as legacy:
+        legacy.setattr(qa, "ALPHA_NOISE_MAX", 0)
+        legacy.setattr(pipeline, "PROCESSING_VERSION", 1)
+        rejected = workflow.ingest("test_moth", 1, 1, source, receipt)
+        assert rejected["status"] == "rejected"
+        with pytest.raises(ValueError, match="already used"):
+            workflow.reprocess("test_moth", 1, 1)
+    checked = workflow.reprocess("test_moth", 1, 1)
+    assert checked["processingVersion"] == 2 and checked["status"] == "technical_pass"
+    assert checked["technicalHistory"][0]["reason"] == rejected["reason"]
+    assert checked["handoff"]["requestId"] == request["requestId"]
+    assert workflow.artifact("test_moth", 1, 1, "raw.png").read_bytes() == original
+    assert workflow.artifact("test_moth", 1, 1, "provenance.json").read_bytes() == receipt.read_bytes()
+
+    second_request = workflow.request("test_clipped", 1, None)
+    source, receipt = provider_result(workflow, second_request, "red")
+    with Image.open(source) as image:
+        ImageDraw.Draw(image).rectangle((0, 50, 50, 200), fill=(230, 30, 20, 128))
+        image.save(source)
+    clipped = workflow.ingest("test_clipped", 1, 1, source, receipt)
+    assert clipped["status"] == "rejected" and "touches the edge" in clipped["reason"]

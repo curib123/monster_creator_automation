@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 
 from PIL import Image
 
-from .qa import RUBRIC, VISUAL_CHECKS, comparison, normalize, visual_result
+from .qa import PROCESSING_VERSION, RUBRIC, VISUAL_CHECKS, comparison, normalize, visual_result
 from .style import PROMPT_VERSION, compile_prompt, verify_master
 
 
@@ -305,24 +305,50 @@ class Workflow:
             write_once(self.artifact(job_id, stage, number, "raw.png"), original)
             write_once(self.artifact(job_id, stage, number, "provenance.json"), json_bytes(receipt))
             target.update(sourceSha256=raw_hash, receipt=receipt, finished=stamp())
-            try:
-                stage_spec = job["brief"]["stages"][stage - 1]
-                png, technical = normalize(original, job["size"], stage, len(job["stages"]),
-                                           stage_spec.get("anchor", job["brief"].get("anchor")) == "floating")
-                # Hash decoded normalized pixels as well as files so identical sprites cannot pass on encoding differences.
-                duplicates = any(
-                    previous.get("sourceSha256") == raw_hash or
-                    previous.get("technical", {}).get("pixelSha256") == technical["pixelSha256"]
-                    for other in jobs.values() for attempts in other["stages"] for previous in attempts
-                    if previous is not target
-                )
-                if duplicates or raw_hash == master["sha256"]:
-                    raise ValueError("Artwork duplicates a prior sprite or the master reference")
-            except (ValueError, OSError, Image.DecompressionBombError) as error:
-                target.update(status="rejected", reason=f"Technical rejection: {error}")
-            else:
-                write_once(self.artifact(job_id, stage, number, "sprite.png"), png)
-                target.update(status="technical_pass", technical=technical)
+            self.check_sprite(jobs, job_id, stage, target, original)
+            return {**target, "nextPhase": phase(job, stage)}
+
+    def check_sprite(self, jobs: dict, job_id: str, stage: int, target: dict, original: bytes) -> None:
+        job = jobs[job_id]
+        target.update(processingVersion=PROCESSING_VERSION, technicalChecked=stamp())
+        try:
+            stage_spec = job["brief"]["stages"][stage - 1]
+            png, technical = normalize(original, job["size"], stage, len(job["stages"]),
+                                       stage_spec.get("anchor", job["brief"].get("anchor")) == "floating")
+            raw_hash = target["sourceSha256"]
+            # Check decoded normalized content as well as file hashes.
+            duplicates = any(
+                previous.get("sourceSha256") == raw_hash or
+                previous.get("technical", {}).get("pixelSha256") == technical["pixelSha256"]
+                for other in jobs.values() for attempts in other["stages"] for previous in attempts
+                if previous is not target
+            )
+            if duplicates or raw_hash == job["referenceSha256"]:
+                raise ValueError("Artwork duplicates a prior sprite or the master reference")
+        except (ValueError, OSError, Image.DecompressionBombError) as error:
+            target.update(status="rejected", reason=f"Technical rejection: {error}")
+        else:
+            write_once(self.artifact(job_id, stage, target["number"], "sprite.png"), png)
+            target.pop("reason", None)
+            target.update(status="technical_pass", technical=technical)
+
+    def reprocess(self, job_id: str, stage: int, number: int) -> dict:
+        with self.checkpoint() as jobs:
+            job = self.selected(jobs, job_id)[job_id]
+            self.master(job)
+            target = self.inflight(job, stage, number)
+            version = target.get("processingVersion", 1)
+            if target["status"] != "rejected" or "visual" in target or "sourceSha256" not in target:
+                raise ValueError("Only the latest technical rejection can be reprocessed")
+            if version >= PROCESSING_VERSION:
+                raise ValueError("The last technical review already used this processing version")
+            original = verified_bytes(self.artifact(job_id, stage, number, "raw.png"), target["sourceSha256"])
+            receipt = json_bytes(target["receipt"])
+            verified_bytes(self.artifact(job_id, stage, number, "provenance.json"), sha256(receipt).hexdigest())
+            target.setdefault("technicalHistory", []).append({"status": "rejected", "reason": target["reason"],
+                                                               "processingVersion": version,
+                                                               "checked": target.get("technicalChecked", target["finished"])})
+            self.check_sprite(jobs, job_id, stage, target, original)
             return {**target, "nextPhase": phase(job, stage)}
 
     def review(self, job_id: str, stage: int | None) -> dict:

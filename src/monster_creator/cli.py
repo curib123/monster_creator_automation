@@ -50,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--image", type=Path, required=True)
     ingest.add_argument("--receipt", type=Path, required=True)
     ingest.set_defaults(run=lambda workflow, args: workflow.ingest(args.job, args.stage, args.attempt, args.image, args.receipt))
+    reprocess = commands.add_parser("reprocess", help="Recheck a technical rejection from immutable raw bytes after a processor update")
+    reprocess.set_defaults(run=lambda workflow, args: workflow.reprocess(args.job, args.stage, args.attempt))
     review = commands.add_parser("review", help="Create side-by-side light and dark comparison evidence and a review template")
     review.add_argument("--stage", type=integer_between(1, 3))
     review.set_defaults(run=lambda workflow, args: workflow.review(args.job, args.stage))
@@ -60,11 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--owner", required=True)
     approve.add_argument("--authorization", required=True)
     approve.set_defaults(run=lambda workflow, args: workflow.approve(args.job, args.owner, args.authorization))
-    for command in (request, fail, ingest, review, record, approve):
+    for command in (request, fail, ingest, reprocess, review, record, approve):
         command.add_argument("--job", required=True)
-    for command in (request, fail, ingest, record):
+    for command in (request, fail, ingest, reprocess, record):
         command.add_argument("--stage", required=True, type=integer_between(1, 3))
-    for command in (fail, ingest):
+    for command in (fail, ingest, reprocess):
         command.add_argument("--attempt", required=True, type=integer_between(1, 10))
 
     status = commands.add_parser("status", help="Report production progress by family, stage and world")
