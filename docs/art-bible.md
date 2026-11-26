@@ -1,6 +1,10 @@
 # Locked master artwork — Aqua and Flame Evolution Line
 
-The owner explicitly approved Aqua and Flame Evolution Line(1).png as the required final visual result for artwork, style and texture, not optional inspiration. Install the exact unmodified file at references/master_style.png. See style_manifest.json for its verified SHA-256, size and format. The PNG itself must be added from the owner's supplied file before real generation. Do not substitute or silently modify it.
+The owner explicitly approved the attached `Aqua and Flame Evolution Line.png`
+as the required artwork, style and texture reference on November 26, 2026.
+Reference version 1.1.0 supersedes the previously recorded, unavailable binary.
+Install the exact unmodified file at `references/master_style.png`. See
+`references/style_manifest.json` for its verified SHA-256, size and format.
 
 ## Mandatory visual language
 - Match the polished 2D anime fantasy rendering of both rows: clean tapered dark-colored linework, sculpted cel-shaded forms with smooth gradient transitions, glossy jewel-like highlights, vibrant but controlled saturation, coherent directional lighting, rich material separation and expressive faces.

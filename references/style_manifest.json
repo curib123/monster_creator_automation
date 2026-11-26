@@ -1,18 +1,18 @@
 {
-  "version": "1.0.0",
-  "status": "owner-approved-reference-binary-pending",
+  "version": "1.1.0",
+  "status": "owner-approved-reference",
   "reference_path": "references/master_style.png",
-  "original_filename": "Aqua and Flame Evolution Line(1).png",
-  "sha256": "557aae7bfc8f0c3069de204bf7fb7fda1ae868d8380f64bcb308fbda17155976",
+  "original_filename": "Aqua and Flame Evolution Line.png",
+  "sha256": "55f0908d04367b514acc53a3bdb89a25322829cfd1885ac907beb17f4f245cb0",
   "width": 1447,
   "height": 1087,
   "mode": "RGBA",
-  "bytes": 2237482,
+  "bytes": 1946740,
   "alpha_range": [
     0,
     255
   ],
-  "source": "Owner-supplied artwork in conversation; commercial rights not independently verified",
+  "source": "Owner-supplied PNG explicitly approved as the new locked master on 2026-11-26",
   "require_exact_hash": true,
   "art_bible": "docs/art-bible.md"
 }
