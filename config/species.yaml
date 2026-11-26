@@ -1,0 +1,63 @@
+version: 1
+allow_unlisted: false
+archetypes:
+  - id: fox
+    name: "Fox"
+    identity: "Pointed ears, narrow muzzle, expressive tail"
+    evolution: "Round kit → agile juvenile → sleek adult with flowing elemental tail"
+  - id: rabbit
+    name: "Rabbit"
+    identity: "Long ears, compact paws, strong hindquarters"
+    evolution: "Soft kit → nimble long-legged juvenile → graceful athletic adult"
+  - id: cat
+    name: "Cat"
+    identity: "Feline muzzle, paws, ears and tail"
+    evolution: "Kitten → agile young feline → sleek elegant adult"
+  - id: eagle
+    name: "Eagle"
+    identity: "Hooked beak, talons, broad feathered wings"
+    evolution: "Eaglet → fledgling → streamlined majestic raptor"
+  - id: phoenix
+    name: "Phoenix"
+    identity: "Mythic avian crest, radiant wings and flowing plumage"
+    evolution: "Small spark-bird → developed mythic bird → elegant radiant phoenix"
+  - id: dragon
+    name: "Dragon"
+    identity: "Draconic head, scales, tail and coherent limb plan"
+    evolution: "Hatchling → developed young dragon → streamlined majestic dragon"
+  - id: butterfly
+    name: "Butterfly"
+    identity: "Six legs, antennae, paired wings and segmented body"
+    evolution: "Tiny stylized butterfly → developed wing geometry → graceful refined butterfly"
+  - id: gecko
+    name: "Gecko"
+    identity: "Rounded toes, reptilian head, flexible tail"
+    evolution: "Small hatchling → agile climber → sleek refined gecko"
+  - id: bear
+    name: "Bear"
+    identity: "Rounded ears, broad paws and ursine muzzle"
+    evolution: "Cub → athletic juvenile → balanced powerful adult, leaner silhouette without losing bear anatomy"
+  - id: manta_ray
+    name: "Manta Ray"
+    identity: "Broad winglike fins, flattened body, cephalic lobes and tail"
+    evolution: "Small ray → developed fin contours → sweeping streamlined manta"
+  - id: jellyfish
+    name: "Jellyfish"
+    identity: "Bell, oral arms and coherent tentacles"
+    evolution: "Small bell → layered developed bell → flowing elegant final form"
+  - id: ghost
+    name: "Ghost"
+    identity: "Floating spectral body with readable face and trailing shape"
+    evolution: "Tiny wisp → defined spirit → elegant ethereal apparition"
+  - id: knight
+    name: "Knight"
+    identity: "Recognizable armored creature silhouette, helmet and coherent limbs"
+    evolution: "Small squire-like creature → agile armored knight → sleek elegant guardian knight"
+  - id: sorcerer
+    name: "Sorcerer"
+    identity: "Mystic caster creature with innate elemental motifs and coherent silhouette"
+    evolution: "Small innate caster → developed elemental conduit → refined arcane master"
+  - id: magician
+    name: "Magician"
+    identity: "Distinct theatrical or spellcraft-themed creature with readable magical implements"
+    evolution: "Small apprentice → expressive spell performer → elegant master magician"
