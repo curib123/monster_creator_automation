@@ -1,6 +1,6 @@
 # Monster Creator Automation — Implementation Plan
 
-Status: design specification only; implementation pending. This is a standalone, reusable asset factory, not a game or a web app. Build CLI-first in Python 3.11+ (or a newer supported version), with Pillow, Pydantic, pytest, and a pluggable image-generation backend. No Unity dependency in the core.
+This is a standalone Python 3.11+ asset factory. The catalog reader, stage prompt compiler, job checkpoints, Pillow sprite processing, review gates and portable export run without Unity. Codex orchestrates the built-in image tool, and the Aevareth checkout runs the existing Editor importer. Setup and implemented commands are in [README.md](README.md).
 
 ## 1. Non-negotiable visual contract
 - Master reference: references/master_style.png, the user-approved water/fire sheet with all six creatures facing left. The owner must add this image before real generation; do not substitute arbitrary images. Record its SHA-256, style version, and rights provenance. Never silently change it.
@@ -74,20 +74,13 @@ Support arbitrary single/hybrid elements, configurable primary/secondary palette
 9. Unity export: one front-left sprite per stage, Sprite (2D and UI), alpha transparency, consistent documented pivot; optionally create right-facing at runtime via flipX when asymmetric lighting/design allows. Output JSON manifest for import tooling and optional atlas; do not touch another game repo automatically. No back-view assets. Export filenames e.g. water_axolotl_001_s01.png, s02.png, s03.png. No animations in MVP.
 10. Legal/provenance: use only owner-approved or properly licensed reference inputs; no prompts referencing named protected characters/franchises, logos, exact signature designs, or third-party asset copying. Review potentially similar designs and names, record source/provider terms and review decisions. Keep code license separate from image rights. Neither AI generation nor redesign guarantees copyright ownership, exclusivity or non-infringement. Do not publish unapproved art or secrets.
 
-## 5. Proposed CLI (implement, then document actual commands)
-    monster-creator init
-    monster-creator doctor
-    monster-creator plan --element water --species axolotl --stages 3
-    monster-creator generate --element fire --species moth --stages 3 --max-cost <budget>
-    monster-creator batch --manifest jobs/monsters.yaml --max-cost <budget>
-    monster-creator import --job <id> --path <files>
-    monster-creator validate --job <id>
-    monster-creator review --job <id>
-    monster-creator approve --job <id> --reviewer <name>
-    monster-creator export --job <id> --format unity
-    monster-creator resume --job <id>
+## 5. CLI
 
-Commands are a proposed interface, not working features yet. Support dry run, per-job resume, no paid requests by default in CI, structured logs and nonzero exit codes on hard failures.
+Use `monster-creator --help` for the command interface and [README.md](README.md)
+for the catalog, pilot and Unity handoff commands. Offline tests exercise fixture
+files and make zero provider requests. Generation uses the agent's built-in
+image tool or a manual reference-based handoff. Any paid backend requires
+separate authorization.
 
 ## 6. Quality rubric
 Score each stage/family 0–10 for style fidelity (25%), aesthetic polish/cuteness (20%), evolution continuity (20%), elemental expression (15%), species/anatomy originality (10%), sprite usability (10%). Target weighted 9/10; no category below 8, and hard constraints always pass. Scores are reviewer judgments rather than guarantees. Stage 3 must face left; any wrong-facing asset, missing stage, fake transparency, clipping, or unresolved IP concern blocks approval.
@@ -97,9 +90,12 @@ Score each stage/family 0–10 for style fidelity (25%), aesthetic polish/cutene
 - M1: config/schema, CLI, plan compiler, registry, reproducible job manifests, mock backend, unit tests.
 - M2: provider adapters, manual handoff, budget guards, resume/retry, provenance.
 - M3: sprite processing, technical/visual QA, review/approval, previews, Unity export.
-- M4: pilot 3 different families (e.g. water axolotl, fire moth, electric hare), three stages each; review all 9 real sprites side-by-side against master. Include an insect with correct anatomy and test a hybrid request. Do not silently spend money; real generation depends on tool availability and authorized budget.
+- M4: pilot Verdant Reach's five Wild, one Legendary and one Guardian family. Compare up to 21 individual sprites with the exact master and record visual results. The owner approves candidate art, production replacement and mass generation separately.
 - M5: reusable Codex skill, docs, CI offline tests, safe batch pipeline and integration guide. CI must not make paid calls or commit generated images automatically.
 - Acceptance: install and run CLI; deterministic mock pipeline tests pass; invalid stage 4 rejected; transparency and orientation QA examples documented; approved outputs export without alteration; resume does not duplicate calls; costs bounded; real pilot status reported honestly; no false success if reference/provider missing.
 - Final handoff: README with setup, examples, provider choice, art bible, tests and results, limits, remaining blockers; commit logical changes, never force push or change unrelated projects. Keep PLAN.md progress and decisions current.
 
-**Locked artwork reference:** The owner approved `Aqua and Flame Evolution Line(1).png` as the mandatory final artwork/style/texture target. Read `docs/art-bible.md` and verify `references/master_style.png` against `references/style_manifest.json` before generation. Use actual reference-image conditioning and compare all outputs visually to the master; reject style drift. The original PNG is still pending installation. Do not claim exact match or legal clearance automatically.
+**Locked artwork reference:** Read `docs/art-bible.md` and verify
+`references/master_style.png` against `references/style_manifest.json` before
+generation. Use actual reference-image conditioning and compare every output
+visually to the master. The installed artwork is a local production input.
