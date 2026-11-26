@@ -8,3 +8,5 @@ Read PLAN.md before implementing or generating any monster. Treat its visual con
 - Use a real authorized image-generation tool/API or manual handoff; do not fabricate outputs or claim mock art is production. Verify the current provider capabilities in official docs. Do not automate website usage or circumvent limits.
 - Do not spend money without an explicit budget and authorization. Never commit credentials. Keep rejected assets out of exports. Human visual approval required.
 - Read .agents/skills/monster-creator/SKILL.md for asset jobs. Keep PLAN.md current; run tests and report blockers. Do not modify unrelated game repositories or overwrite approved assets without approval.
+
+**25-world integration:** Support 24 campaign worlds and one endless convergence world. Read the authoritative local game catalog and element registry, preserve distinct element IDs and asset keys, support hybrids and report coverage for every world. See PLAN.md. Never hard-code a one-world-per-element assumption.
