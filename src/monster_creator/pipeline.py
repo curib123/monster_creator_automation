@@ -104,15 +104,26 @@ class Workflow:
         self.workspace = workspace.resolve()
 
     @contextmanager
-    def checkpoint(self):
+    def checkpoint(self, *, read_only: bool = False):
         database = self.workspace / "jobs" / "checkpoints.sqlite3"
-        database.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(database, timeout=30)) as connection, connection:
-            connection.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, record TEXT NOT NULL)")
-            connection.execute("BEGIN IMMEDIATE")
+        if read_only and not database.exists():
+            yield {}
+            return
+        if not read_only:
+            database.parent.mkdir(parents=True, exist_ok=True)
+        location = database.as_uri() + "?mode=ro" if read_only else database
+        with closing(sqlite3.connect(location, uri=read_only, timeout=30)) as connection, connection:
+            if not read_only:
+                connection.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, record TEXT NOT NULL)")
+                connection.execute("BEGIN IMMEDIATE")
+            elif not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+                yield {}
+                return
             previous = dict(connection.execute("SELECT id, record FROM jobs"))
             jobs = {key: json.loads(value) for key, value in previous.items()}
             yield jobs
+            if read_only:
+                return
             for key, value in jobs.items():
                 record = json_bytes(value).decode("utf-8")
                 if record != previous.get(key):
@@ -209,7 +220,7 @@ class Workflow:
     def resume(self, job_id: str | None, limit: int, world_id: str | None = None, rejected_only: bool = False) -> dict:
         eligible, requests = [], []
         blockers = {}
-        with self.checkpoint() as jobs:
+        with self.checkpoint(read_only=True) as jobs:
             try:
                 verified = verify_master(self.repo)
                 missing = None
@@ -416,7 +427,7 @@ class Workflow:
 
     def status(self, job_id: str | None, world_id: str | None = None, validate: bool = False) -> dict:
         families, totals, worlds = {}, Counter(), {}
-        with self.checkpoint() as jobs:
+        with self.checkpoint(read_only=True) as jobs:
             for key, job in self.selected(jobs, job_id).items():
                 world = job["brief"]["worldId"]
                 if world_id is not None and world_id != world:

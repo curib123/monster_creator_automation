@@ -77,11 +77,11 @@ After owner approval to begin mass generation, prepare the full plan:
 
 ```powershell
 & $mc catalog plan --catalog jobs/aevareth-catalog.json --all --require-complete --output jobs/aevareth-production.json
-& $mc --workspace jobs/aevareth-production prepare --brief jobs/aevareth-production.json
+& $mc --workspace jobs/pilot-verdant-1-1 prepare --brief jobs/aevareth-production.json
 ```
 
-The batch requests require `--authorization TEXT` at reservation. Review the
-retained families and pilot results before starting another workspace.
+The batch requests require `--authorization TEXT` at reservation. Using the
+existing workspace retains pilot attempts, artwork and approvals.
 
 ## Generate, review and export
 

@@ -75,6 +75,15 @@ def evaluate_fixture(workflow, stage, **changes):
     return workflow.record_review("test_moth", stage, write_json(workflow, "test-review.json", report))
 
 
+def test_empty_status_and_resume_leave_no_checkpoint_files(workflow):
+    workspace = workflow.workspace / "unstarted workspace"
+    empty = Workflow(workflow.repo, workspace)
+    assert empty.status(None) == {"totals": {}, "worlds": {}, "jobs": {}}
+    assert empty.status(None, "test-world", validate=True)["jobs"] == {}
+    assert empty.resume(None, 1)["requests"] == []
+    assert not workspace.exists()
+
+
 def test_prepare_with_missing_master_stays_offline_and_is_idempotent(workflow, capsys):
     workflow.repo.joinpath("references/master_style.png").unlink()
     assert prepare(workflow, family(3)) == prepare(workflow, family(3))
