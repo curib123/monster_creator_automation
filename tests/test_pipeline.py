@@ -10,16 +10,20 @@ import pytest
 from monster_creator.cli import main
 from monster_creator import pipeline, qa
 from monster_creator.pipeline import Workflow, json_bytes, read_json
-from monster_creator.qa import RUBRIC, VISUAL_CHECKS
+from monster_creator.qa import REVIEW_POLICY_VERSION, RUBRIC, VISUAL_CHECKS, lineup_rules, stage_checks
 
 
 @pytest.fixture
 def workflow(tmp_path):
+    config = tmp_path / "config"
+    config.mkdir()
+    policy = Path(__file__).resolve().parents[1] / "config/species.yaml"
+    (config / policy.name).write_bytes(policy.read_bytes())
     references = tmp_path / "references"
     references.mkdir()
     master = references / "master_style.png"
     save_fixture(master, "pink")
-    lock = {"reference_path": "references/master_style.png", "version": "test", "mode": "RGBA",
+    lock = {"reference_path": "references/master_style.png", "version": "test", "format": "PNG", "mode": "RGBA",
             "original_filename": "test-only-master.png", "width": 320, "height": 320,
             "bytes": master.stat().st_size, "sha256": sha256(master.read_bytes()).hexdigest(),
             "require_exact_hash": True, "alpha_range": [0, 255]}
@@ -36,9 +40,12 @@ def save_fixture(path, color, background=(0, 0, 0, 0)):
 def family(stages=1, family_id="test_moth", world="test-world"):
     return {"familyId": family_id, "displayName": family_id, "description": "Test-only design",
             "worldId": world, "category": "Wild", "gameElement": "Fire", "monsterType": "Common",
-            "isNewFamily": True, "species": "moth", "elements": ["fire"], "concept": "Test fixture",
+            "isNewFamily": True, "archetypeId": "butterfly", "elements": ["fire"],
+            "concept": f"Test fixture for {family_id}", "identityAnchors": "Test envelope and colors.",
             "stages": [{"stage": stage, "name": f"Fixture {stage}", "title": "Test",
-                        "description": f"QA fixture for stage {stage}"} for stage in range(1, stages + 1)]}
+                        "description": f"QA fixture for stage {stage}",
+                        **({"transitionRationale": f"Test growth reason {stage}."} if stage > 1 else {})}
+                       for stage in range(1, stages + 1)]}
 
 
 def write_json(workflow, name, value):
@@ -71,8 +78,17 @@ def evaluate_fixture(workflow, stage, **changes):
     candidate = workflow.review("test_moth", stage)["candidates"][0]
     assert Path(candidate["preview"]).is_file()
     report = {**candidate["reviewTemplate"], "reviewer": "QA fixture", "notes": "Test evidence only.",
-              "scores": dict.fromkeys(RUBRIC, 9), **dict.fromkeys(VISUAL_CHECKS, True), **changes}
+              "scores": dict.fromkeys(RUBRIC, 9), **dict.fromkeys(stage_checks(stage), True), **changes}
     return workflow.record_review("test_moth", stage, write_json(workflow, "test-review.json", report))
+
+
+def evaluate_lineup_fixture(workflow, count, **changes):
+    lineup = workflow.review("test_moth", None)["lineup"]
+    assert Path(lineup["preview"]).is_file()
+    dimensions, checks = lineup_rules(count)
+    report = {**lineup["reviewTemplate"], "reviewer": "QA fixture", "notes": "Synthetic lineup evidence only.",
+              "scores": dict.fromkeys(dimensions, 9), **dict.fromkeys(checks, True), **changes}
+    return workflow.record_lineup("test_moth", write_json(workflow, "test-lineup.json", report))
 
 
 def test_empty_status_and_resume_leave_no_checkpoint_files(workflow):
@@ -100,6 +116,24 @@ def test_prepare_with_missing_master_stays_offline_and_is_idempotent(workflow, c
         prepare(workflow, family(2))
     with pytest.raises(ValueError, match="one to three"):
         prepare(workflow, family(4))
+
+
+def test_prepare_rejects_duplicate_concepts_and_resume_blocks_legacy_prompt(workflow):
+    original = family()
+    duplicate = {**family(family_id="new-name"), "concept": f"  {original['concept'].upper()}  "}
+    with pytest.raises(ValueError, match="duplicates"):
+        prepare(workflow, [original, duplicate])
+    assert workflow.status(None)["jobs"] == {}
+    prepare(workflow, original)
+    with pytest.raises(ValueError, match="duplicates"):
+        prepare(workflow, duplicate)
+    with workflow.checkpoint() as jobs:
+        jobs[original["familyId"]]["promptVersion"] = "1.0.0"
+    pending = workflow.resume(original["familyId"], 1)
+    assert pending["requests"] == []
+    assert "different prompt version" in pending["briefBlockers"][original["familyId"]]
+    with pytest.raises(ValueError, match="different prompt version"):
+        workflow.request(original["familyId"], 1, None)
 
 
 def test_checkpoint_is_single_request_under_concurrency_and_has_bounded_retries(workflow):
@@ -190,13 +224,21 @@ def test_fixture_review_retry_owner_approval_and_export_are_hash_bound(workflow)
     assert evaluate_fixture(workflow, 2)["status"] == "visual_pass"
     with pytest.raises(ValueError, match="owner approval"):
         workflow.export("test_moth")
+    with pytest.raises(ValueError, match="whole-family lineup review"):
+        workflow.approve("test_moth", "Fixture owner", "Test package only.")
+    assert evaluate_lineup_fixture(workflow, 2)["result"]["passed"] is True
     assert workflow.approve("test_moth", "Fixture owner", "Test package only.")["approvedStages"] == 2
     package = workflow.export("test_moth")
     assert package == workflow.export("test_moth")
     manifest_path = Path(package["manifest"])
     manifest = read_json(manifest_path)
-    assert manifest["schemaVersion"] == 1 and len(manifest["families"][0]["stages"]) == 2
-    for stage in manifest["families"][0]["stages"]:
+    assert manifest["schemaVersion"] == 1 and manifest["reviewPolicyVersion"] == REVIEW_POLICY_VERSION
+    exported = manifest["families"][0]
+    assert len(exported["stages"]) == 2
+    lineup = exported["lineupReview"]
+    assert lineup["stageSha256"] == {str(stage["stage"]): stage["sha256"] for stage in exported["stages"]}
+    assert lineup["comparisonSha256"] == sha256((manifest_path.parent / exported["lineupPreviewPath"]).read_bytes()).hexdigest()
+    for stage in exported["stages"]:
         sprite, review = (manifest_path.parent / stage[field] for field in ("path", "reviewPath"))
         assert stage["sha256"] == sha256(sprite.read_bytes()).hexdigest()
         assert stage["reviewSha256"] == sha256(review.read_bytes()).hexdigest()
@@ -204,6 +246,7 @@ def test_fixture_review_retry_owner_approval_and_export_are_hash_bound(workflow)
         assert proof["approved"] is True and proof["score"] == 9
         assert proof["reviewer"] == "Fixture owner" and proof["sha256"] == stage["sha256"]
         assert proof["referenceSha256"] == manifest["referenceSha256"]
+        assert proof["familyReviewSha256"] == sha256(json_bytes(lineup)).hexdigest()
         assert all(proof[field] for field in VISUAL_CHECKS)
     progress = workflow.status(None, "test-world")["worlds"]["test-world"]["Common"]
     assert progress == {"plannedFamilies": 1, "plannedStages": 2, "generatedStages": 2,
@@ -211,6 +254,61 @@ def test_fixture_review_retry_owner_approval_and_export_are_hash_bound(workflow)
     sprite.write_bytes(b"changed")
     with pytest.raises(ValueError, match="hash changed"):
         workflow.export("test_moth")
+
+
+def test_lineup_hard_rejection_preserves_siblings_and_requires_current_evidence(workflow):
+    prepare(workflow, family(3))
+    for stage, color in enumerate(("blue", "green", "gold"), 1):
+        assert ingest(workflow, workflow.request("test_moth", stage, None), color)["status"] == "technical_pass"
+        if stage == 3:
+            assert evaluate_fixture(workflow, stage, finalFormRefinementReviewed=False)["status"] == "rejected"
+            assert ingest(workflow, workflow.request("test_moth", stage, None), "lime")["status"] == "technical_pass"
+        assert evaluate_fixture(workflow, stage)["status"] == "visual_pass"
+
+    dimensions, _ = lineup_rules(3)
+    with pytest.raises(ValueError, match="exact current stage images"):
+        evaluate_lineup_fixture(workflow, 3, stageSha256={"3": "0" * 64})
+    with pytest.raises(ValueError, match="revisionStages"):
+        evaluate_lineup_fixture(workflow, 3, scores={**dict.fromkeys(dimensions, 10), "evolutionLogic": 7})
+    rejected = evaluate_lineup_fixture(workflow, 3, scores=dict.fromkeys(dimensions, 10),
+                                       naturalDevelopment=False, revisionStages=[2])["result"]
+    assert rejected["passed"] is False and rejected["score"] == 10
+    stages = workflow.status("test_moth")["jobs"]["test_moth"]["stages"]
+    assert [stage["status"] for stage in stages] == ["visual_pass", "pending", "visual_pass"]
+    assert "Whole-family visual rejection" in stages[1]["reason"]
+    with pytest.raises(ValueError, match="whole-family lineup review"):
+        workflow.approve("test_moth", "Fixture owner", "Test package only.")
+    assert ingest(workflow, workflow.request("test_moth", 2, None), "purple")["status"] == "technical_pass"
+    assert evaluate_fixture(workflow, 2)["status"] == "visual_pass"
+    reviewed = evaluate_lineup_fixture(workflow, 3)["result"]
+    assert reviewed["passed"] is True
+    assert reviewed["stageSha256"]["2"] != rejected["stageSha256"]["2"]
+    assert reviewed["stageSha256"]["3"] == rejected["stageSha256"]["3"]
+
+
+def test_previous_master_flags_art_without_mutating_approval_or_existing_export(workflow):
+    prepare(workflow)
+    assert ingest(workflow, workflow.request("test_moth", 1, None), "blue")["status"] == "technical_pass"
+    evaluate_fixture(workflow, 1)
+    evaluate_lineup_fixture(workflow, 1)
+    workflow.approve("test_moth", "Fixture owner", "Test package only.")
+    exported = Path(workflow.export("test_moth")["manifest"])
+    snapshot = exported.read_bytes()
+    master = workflow.repo / "references/master_style.png"
+    lock = workflow.repo / "references/style_manifest.json"
+    save_fixture(master, "orange")
+    lock.write_bytes(json_bytes({**read_json(lock), "version": "new", "bytes": master.stat().st_size,
+                                  "sha256": sha256(master.read_bytes()).hexdigest()}))
+
+    report = workflow.status("test_moth", validate=True)
+    job = report["jobs"]["test_moth"]
+    assert "Master artwork changed" in job["revisionRequired"]
+    assert job["stages"][0]["status"] == "revision_required"
+    assert job["stages"][0]["checkpointStatus"] == "approved"
+    assert report["worlds"]["test-world"]["Common"]["approvedStages"] == 0
+    with pytest.raises(ValueError, match="Unity export requires revision"):
+        workflow.export("test_moth")
+    assert exported.read_bytes() == snapshot
 
 
 def test_mass_prepare_is_offline_and_generation_requires_explicit_authorization(workflow):

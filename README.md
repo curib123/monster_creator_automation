@@ -1,8 +1,8 @@
 # Monster Creator Automation
 
-Produce original one-to-three-stage monster families using Aevareth's saved catalog
-and the owner-approved artwork. This checkout holds the reusable art workflow.
-The game checkout owns Unity assets, encounter rules and saves.
+Create original one-to-three-stage monster families using Aevareth's saved
+catalog and the current owner-approved artwork. This checkout owns the art
+workflow. The game checkout owns Unity assets, encounter rules and saves.
 
 ## Set up the neighboring checkouts
 
@@ -14,116 +14,120 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e '.[test]'
 $mc = (Resolve-Path .\.venv\Scripts\monster-creator.exe).Path
 & $mc --help
+& $mc doctor
 ```
 
-From the game checkout, start Codex and say “Use monster-creator to prepare
-Verdant Reach” or “Resume monster production.” The game instructions route
-the request to this repository's [Codex skill](.agents/skills/monster-creator/SKILL.md).
+From the game checkout, start Codex and ask it to use the
+[monster-creator skill](.agents/skills/monster-creator/SKILL.md) for a family,
+world or existing job:
 
 ```powershell
 codex -C . --add-dir ../monster_creator_automation
 ```
 
-## Verify the master and provider
+## Verify the master
 
-On the automation side, install the exact owner-supplied original
-`Aqua and Flame Evolution Line.png`:
+The repository includes the exact owner-supplied
+`master_style_three_elements_stages_1-3.png` at
+`references/master_style.png`. Version 2.0.0 is a 1054 × 1427 RGBA PNG
+with 1,846,900 bytes. Its SHA-256 is
+`09d5843a8660ef8200f2e171e8cab8a17d6048b37de31ea745a3cb10006ce6ba`.
+The [style manifest](references/style_manifest.json) records the lock, and
+the [art bible](docs/art-bible.md) explains the visual criteria.
+Run `doctor` before generation. If the file is missing, restore the exact
+tracked file or install the owner-supplied original with
+`python -m monster_creator.style install PATH`. A changed file requires
+resolving the mismatch before generation.
 
-```powershell
-.\.venv\Scripts\python.exe -m monster_creator.style install 'C:/path/to/Aqua and Flame Evolution Line.png'
-& $mc doctor
-```
+Use the Codex built-in image tool when the current session has it. Attach
+the actual master and any requested family reference. The CLI handles
+checkpoints, prompts and file processing. The skill controls image tool calls.
+Use an actual reference-based manual handoff when necessary. A paid image API
+requires separate authorization and a budget.
 
-The installer checks the byte count, SHA-256 and PNG metadata against
-[the committed lock](references/style_manifest.json). The expected digest is
-`55f0908d04367b514acc53a3bdb89a25322829cfd1885ac907beb17f4f245cb0`.
-Read [the art bible](docs/art-bible.md) for visual criteria.
+## Plan and prepare
 
-Use the signed-in Codex built-in image tool. On November 26, 2026, Codex CLI
-0.167.0 used an attached geometric test image via `-i`, and wrote a 1254 × 1254
-RGBA PNG. Inspection found the requested edit, retained reference features,
-and alpha from 0 to 255. The diagnostic used the ChatGPT session.
-See the
-[OpenAI Codex announcement](https://openai.com/index/codex-for-almost-everything/)
-and the [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli).
-
-## Plan a world or a batch
-
-Run the following from the automation checkout:
+Run the catalog commands from the automation checkout:
 
 ```powershell
 & $mc catalog sync --game ../aevareth_monster --output jobs/aevareth-catalog.json
 & $mc catalog coverage --catalog jobs/aevareth-catalog.json
-& $mc catalog plan --catalog jobs/aevareth-catalog.json --world 'Verdant Reach' --output jobs/verdant-reach.json
-& $mc --workspace jobs/pilot-verdant-1-1 prepare --brief jobs/verdant-reach.json
-& $mc --workspace jobs/pilot-verdant-1-1 status
-& $mc --workspace jobs/pilot-verdant-1-1 resume --limit 1
+& $mc catalog plan --catalog jobs/aevareth-catalog.json --world 'Cedarheart Grove' --output jobs/cedarheart-grove.json
 ```
 
-Verdant Reach's seven briefs reuse the current five Wild, one Legendary and one
-Guardian IDs and their 21 stage identities. The templates and prompts can be
-prepared while the master is pending. Coverage distinguishes inherited families,
-planned slots and game-data gaps. The checked-in plan fills 175 slots with
-104 existing dedicated families and 71 proposals. The 525-stage ceiling
-includes retained artwork. Four legacy Hybrid worlds have no saved element
-components. Their proposed design pairings are labeled in coverage.
+Coverage tracks five Wild, one Legendary and one Guardian per world across
+25 worlds. The ceiling is 175 unique families and 525 sprites. It reports
+inherited families, proposals and game-data gaps. Inherited family IDs and
+sprites are retained. Incompatible or unclassified inherited designs need
+visual assessment and an approved current brief before regeneration.
 
-Use the same `--workspace` for pilot commands throughout the job. For a world
-validation, resolve its ID with the catalog, check its saved art against
-the game manifest, and use `validate --world ID` for the candidate checkpoints.
-An empty checkpoint result means the workspace has no candidates for that world.
+Each new brief has one `archetypeId` from
+[`config/species.yaml`](config/species.yaml), shared `identityAnchors`, and a
+`transitionRationale` for each stage after Stage 1. Describe the change in
+anatomy, elemental maturity and silhouette. The catalog plan shows the other
+world, element, family and stage fields used by `prepare`.
 
-After owner approval to begin mass generation, prepare the full plan:
+For a pilot, save the selected family row from a catalog plan or a complete
+ad hoc brief as `jobs/pilot-family.json`, then run:
 
 ```powershell
-& $mc catalog plan --catalog jobs/aevareth-catalog.json --all --require-complete --output jobs/aevareth-production.json
-& $mc --workspace jobs/pilot-verdant-1-1 prepare --brief jobs/aevareth-production.json
+& $mc --workspace jobs/pilot-style-2 prepare --brief jobs/pilot-family.json
+& $mc --workspace jobs/pilot-style-2 status
+& $mc --workspace jobs/pilot-style-2 resume --limit 1
 ```
 
-The batch requests require `--authorization TEXT` at reservation. Using the
-existing workspace retains pilot attempts, artwork and approvals.
+Use the same `--workspace` throughout a job. Older jobs remain pinned to
+their original master and prompt. Use `status` or `validate` to identify
+superseded evidence in such jobs, and use a fresh workspace for new art.
+For a world audit, compare saved art with the current master and run
+`validate --world ID` in the intended candidate workspace. An empty
+checkpoint result means the workspace has no candidates for that world.
 
-## Generate, review and export
+For a complete offline coverage check, replace `--world` with `--all
+--require-complete` to compile all 25 worlds. Mass generation requires
+both owner approval of the pilot artwork and separate batch authorization.
+Record the authorization with `request --authorization TEXT`.
 
-Use the skill to work through the pending jobs. The CLI returns the next prompt,
-master and optional prior family-stage reference. Reserve the attempt with
-`request --job ID --stage N` immediately before tool use. Pass the master as
-an actual input to the built-in tool. Save the returned PNG and provider receipt,
-then run `ingest --job ID --stage N --attempt N --image FILE --receipt FILE`.
-The receipt records `provider` (`codex-image-tool` or `manual`), `request_id`,
-`used_reference: true`, and `reference_sha256`. If a prior stage was required,
-include `family_reference_sha256`. Include the provider request ID, model and cost
-when reported. The CLI does local processing and the Codex skill controls image
-tool calls.
+## Generate and review
 
-For a confirmed failed request use `fail --job ID --stage N --attempt N --reason TEXT`.
-If a technical check is corrected, `reprocess --job ID --stage N --attempt N`
-can rerun it against the latest rejected raw image and receipt. It preserves
-the prior result and makes no new provider call.
-After interruption, recover in-flight output using its existing attempt before
-reserving another. Use `review --job ID` to build comparisons and review forms,
-then `record-review --job ID --stage N --report FILE`. Inspect each candidate
-against the master and its family at full resolution and on light and dark
-backgrounds. All visual checks must pass, the weighted score must be at least
-9/10, and every rubric dimension must score at least 8/10. The tool keeps rejected
-attempts for audit and queues stages with remaining attempts.
+1. Run `resume` for pending or in-flight work. Reserve with
+   `request --job ID --stage N` before calling the image tool. Attach the
+   verified master and any prior-stage reference listed in the request.
+   Keep the returned PNG, then call
+   `ingest --job ID --stage N --attempt N --image FILE --receipt FILE`.
+   The receipt records `provider` (`codex-image-tool` or `manual`),
+   `request_id`, `used_reference: true`, and `reference_sha256`. Include
+   `family_reference_sha256` when required and retain any reported model,
+   provider request ID and cost.
+2. Recover an in-flight request using its original attempt. Record confirmed
+   provider failures with `fail --job ID --stage N --attempt N --reason TEXT`.
+   `reprocess --job ID --stage N --attempt N` reruns the latest technical
+   rejection against the saved raw image after a processor correction.
+   `extend-retry --job ID --stage N --reason TEXT` allows one further
+   attempt for an exhausted stage, up to 10 attempts total for that stage.
+3. Run `review --job ID --stage N` and inspect each candidate against the
+   locked master at full resolution and on light and dark backgrounds.
+   Complete the report and run `record-review --job ID --stage N --report FILE`.
+   All visual checks must pass. The weighted stage score must reach 9/10,
+   with each dimension scoring at least 8/10.
+4. Run `review --job ID` when the current stages pass. Inspect the complete
+   lineup, fill its template, and run `record-lineup --job ID --report FILE`.
+   Evaluate the family against the [evolution quality gate](docs/evolution-quality.md).
+   A rejected lineup can send its identified `revisionStages` back for
+   bounded retries. Reevaluate the full lineup after changes.
 
-When a stage exhausts its retries and there is a specific correction to try,
-use `extend-retry --job ID --stage N --reason TEXT` in the same workspace. It
-records one additional attempt for that stage, up to 10 total. Review history,
-the original family brief, and the limits on sibling stages stay intact. Write
-the intended correction in the reason. The next prompt carries that direction
-and the previous rejection feedback. Reserve it with the regular `request` command.
+After the owner explicitly approves the current whole-family artwork, record
+the decision with `approve --job ID --owner NAME --authorization TEXT`
+and run `export --job ID`. The portable package includes sprites, pivots,
+hashes, provenance and review evidence. Use the game's
+`docs/monster-batches.md` reviewed-family handoff to validate an authorized
+Unity import. Replacing existing production sprites needs the owner's
+separate authorization.
 
-After the owner explicitly approves the candidate artwork, record the decision
-with `approve --job ID --owner NAME --authorization TEXT` and run
-`export --job ID`. The portable package preserves sprite hashes, pivot,
-provenance and review evidence. Follow the Aevareth
-`docs/monster-batches.md` handoff to validate it in the existing Unity importer.
-Owner authorization for replacing production pixels is a separate import input.
+## Run the offline tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The [implementation plan](PLAN.md) records the initial scope and open work.
+The [implementation plan](PLAN.md) records scope and rollout criteria.

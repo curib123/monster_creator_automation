@@ -1,13 +1,20 @@
 from collections import Counter
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
+from monster_creator.archetypes import load_archetypes
 from monster_creator.catalog import (
     MONSTER_TYPES, QUOTAS, choose_world, coverage, default_designs, plan, validate_catalog, validate_designs,
 )
 from monster_creator.roster_designs import PROPOSED_HYBRIDS, ROSTER_DESIGNS
 from monster_creator.verdant import VERDANT_DESIGNS
+
+
+@pytest.fixture
+def archetypes():
+    return load_archetypes(Path(__file__).resolve().parents[1])
 
 
 @pytest.fixture
@@ -60,8 +67,8 @@ def catalog():
     return validate_catalog(snapshot)
 
 
-def test_complete_world_roster_and_distinct_proposals(catalog):
-    designs = default_designs(catalog)
+def test_complete_world_roster_and_distinct_proposals(catalog, archetypes):
+    designs = default_designs(catalog, archetypes)
     report = coverage(catalog, designs)
     assert report["worldCount"] == 25
     assert report["elementCount"] == 19
@@ -71,7 +78,8 @@ def test_complete_world_roster_and_distinct_proposals(catalog):
     assert report["maximumSprites"] == 525
     assert report["missingDesignSlots"] == 0
     assert Counter(row["category"] for row in designs) == {"Wild": 56, "Legendary": 14, "Guardian": 1}
-    assert len({row["species"] for row in designs}) == len(designs)
+    assert {row["archetypeId"] for row in designs} <= archetypes.keys()
+    assert len({row["archetypeId"] for row in designs}) < len({row["description"] for row in designs}) == len(designs)
     assert {row["id"] for row in report["worlds"] if row["componentsUnspecified"]} == set(PROPOSED_HYBRIDS)
     assert all(row["plannedFamilies"] == QUOTAS for row in report["worlds"])
     assert set(report["worlds"][-1]["components"]) == {row["id"] for row in catalog["elements"]} - {"hybrid"}
@@ -80,14 +88,16 @@ def test_complete_world_roster_and_distinct_proposals(catalog):
     assert (asset_keys["grass"], asset_keys["land"]) == ("land", "terra")
 
 
-def test_verdant_reuses_every_saved_family_and_stage_identity(catalog):
+def test_verdant_catalog_keeps_legacy_families_out_of_generation(catalog, archetypes):
     world = choose_world(catalog, "Verdant Reach")
     assert choose_world(catalog, "1") == world
-    roster = plan(catalog, [world], default_designs(catalog))
-    assert {row["familyId"] for row in roster["families"]} == set(VERDANT_DESIGNS)
-    assert sum(len(row["stages"]) for row in roster["families"]) == 21
-    assert all(row["gameElement"] == "Grass" and row["isNewFamily"] is False for row in roster["families"])
+    before = deepcopy(catalog)
+    roster = plan(catalog, [world], default_designs(catalog, archetypes), archetypes)
+    assert roster["families"] == []
+    assert set(roster["worlds"][0]["existingFamiliesWithoutDraftBrief"]) == set(VERDANT_DESIGNS)
+    assert {row["status"] for row in roster["worlds"][0]["legacyArchetypeReview"].values()} == {"requires-migration-plan"}
     assert roster["worlds"][0]["existingFamilies"] == QUOTAS
+    assert catalog == before
 
 
 def test_missing_slots_are_reported(catalog):
@@ -96,23 +106,45 @@ def test_missing_slots_are_reported(catalog):
     assert report["worlds"][-1]["missingDesignSlots"] == {"Wild": 4, "Legendary": 1, "Guardian": 1}
 
 
-def test_incorrect_hybrid_and_incomplete_endless_fail(catalog):
+def test_incorrect_hybrid_and_incomplete_endless_fail(catalog, archetypes):
     bad_catalog = deepcopy(catalog)
     bad_catalog["worlds"][-1]["components"].remove("grass")
     with pytest.raises(ValueError, match="Endless"):
         validate_catalog(bad_catalog)
     assert choose_world(catalog, "Psionic Crystal Nexus")["components"] == ["psychic", "crystal"]
-    proposal = next(row for row in default_designs(catalog) if row["familyId"] == "nacreseer")
-    assert validate_designs(catalog, [proposal]) == [proposal]
+    proposal = next(row for row in default_designs(catalog, archetypes) if row["familyId"] == "nacreseer")
+    assert validate_designs(catalog, [proposal], archetypes) == [proposal]
     with pytest.raises(ValueError, match="Wrong world hybrid"):
-        validate_designs(catalog, [{**proposal, "elements": ["psychic", "glass"]}])
+        validate_designs(catalog, [{**proposal, "elements": ["psychic", "glass"]}], archetypes)
 
 
-def test_duplicate_excess_and_fourth_stage_fail(catalog):
-    proposal = default_designs(catalog)[0]
+def test_duplicate_excess_and_fourth_stage_fail(catalog, archetypes):
+    proposal = default_designs(catalog, archetypes)[0]
     with pytest.raises(ValueError, match="conflicts"):
-        validate_designs(catalog, [proposal, proposal])
+        validate_designs(catalog, [proposal, proposal], archetypes)
+    with pytest.raises(ValueError, match="Duplicate family concept"):
+        validate_designs(catalog, [proposal, {**proposal, "familyId": "similar", "displayName": "Similar"}], archetypes)
     with pytest.raises(ValueError, match="exceeds"):
-        validate_designs(catalog, [{**proposal, "worldId": "verdant-reach", "elements": ["grass"], "gameElement": "Grass"}])
+        validate_designs(catalog, [{**proposal, "worldId": "verdant-reach", "elements": ["grass"], "gameElement": "Grass"}],
+                         archetypes)
     with pytest.raises(ValueError, match="one to three"):
-        validate_designs(catalog, [{**proposal, "stages": [*proposal["stages"], {"stage": 4}]}])
+        validate_designs(catalog, [{**proposal, "stages": [*proposal["stages"], {"stage": 4}]}], archetypes)
+
+
+def test_archetype_policy_and_lineage_cannot_be_bypassed(catalog, archetypes):
+    assert set(archetypes) == {"fox", "rabbit", "cat", "eagle", "phoenix", "dragon", "butterfly", "gecko", "bear",
+                              "manta_ray", "jellyfish", "ghost", "knight", "sorcerer", "magician"}
+    proposal = default_designs(catalog, archetypes)[0]
+    for archetype_id in archetypes:
+        assert validate_designs(catalog, [{**proposal, "archetypeId": archetype_id}], archetypes)
+    for invalid in (None, "tortoise", ["fox", "rabbit"]):
+        with pytest.raises(ValueError, match="one approved archetypeId"):
+            validate_designs(catalog, [{**proposal, "archetypeId": invalid}], archetypes)
+    with pytest.raises(ValueError, match="identityAnchors"):
+        validate_designs(catalog, [{**proposal, "identityAnchors": " "}], archetypes)
+    for changes, match in (({"archetypeId": "eagle"}, "changes the family archetype"),
+                           ({"transitionRationale": None}, "distinct transitionRationale"),
+                           ({"description": proposal["stages"][0]["description"].upper()}, "distinct visual design")):
+        first, second, third = proposal["stages"]
+        with pytest.raises(ValueError, match=match):
+            validate_designs(catalog, [{**proposal, "stages": [first, {**second, **changes}, third]}], archetypes)

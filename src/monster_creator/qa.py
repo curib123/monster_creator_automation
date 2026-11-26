@@ -9,21 +9,40 @@ from PIL import Image, ImageDraw
 
 PIVOT = (0.5, 0.06)
 PROCESSING_VERSION = 3
+REVIEW_POLICY_VERSION = 2
 ALPHA_NOISE_MAX = 8  # Matches the existing Aevareth monster sprite extraction policy.
 RUBRIC = {
     "styleFidelity": 25,
     "aestheticPolish": 20,
     "evolutionContinuity": 20,
     "elementalExpression": 15,
-    "speciesAnatomyOriginality": 10,
-    "spriteUsability": 10,
+    "archetypeAnatomy": 10,
+    "silhouetteUsability": 10,
 }
 VISUAL_CHECKS = (
     "identityReviewed", "anatomyReviewed", "facingReviewed", "progressionReviewed",
     "lightBackgroundReviewed", "darkBackgroundReviewed", "textureReviewed",
     "styleReviewed", "elementReviewed", "fullSilhouetteReviewed",
-    "noTextReviewed", "originalityReviewed",
+    "noTextReviewed", "originalityReviewed", "archetypeReviewed", "aestheticsReviewed",
+    "transparencyReviewed",
 )
+FINAL_CHECK = "finalFormRefinementReviewed"
+
+
+def stage_checks(stage: int) -> tuple[str, ...]:
+    return VISUAL_CHECKS + ((FINAL_CHECK,) if stage == 3 else ())
+
+
+def lineup_rules(count: int) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    dimensions = ("aesthetics", "anatomyAndSilhouette", "cleanliness")
+    checks = ("archetypeCoherent", "elementIntegrated", "aestheticallyCoherent")
+    if count >= 2:
+        dimensions += ("evolutionLogic", "identityContinuity", "stageDifferentiation")
+        checks += ("naturalDevelopment", "purposefulStageChanges")
+    if count == 3:
+        dimensions += ("finalFormRefinement",)
+        checks += (FINAL_CHECK,)
+    return dimensions, checks
 
 
 def normalize(source: bytes, size: int, stage: int, count: int, floating: bool) -> tuple[bytes, dict]:
@@ -65,33 +84,67 @@ def normalize(source: bytes, size: int, stage: int, count: int, floating: bool) 
     }
 
 
-def visual_result(report: dict, technical: dict, reference_hash: str) -> dict:
-    if report.get("sha256") != technical["sha256"] or report.get("referenceSha256") != reference_hash:
-        raise ValueError("Visual evidence must identify the exact sprite and master SHA-256")
+def evaluate_scores(report: dict, dimensions, checks) -> tuple[dict, dict]:
     for field in ("reviewer", "notes"):
         if not isinstance(report.get(field), str) or not report[field].strip():
             raise ValueError(f"Visual evidence requires {field}")
-    if any(type(report.get(field)) is not bool for field in VISUAL_CHECKS):
+    if any(type(report.get(field)) is not bool for field in checks):
         raise ValueError("Visual evidence must explicitly evaluate every visual check")
     scores = report.get("scores")
-    if not isinstance(scores, dict) or set(scores) != set(RUBRIC) or any(
+    if not isinstance(scores, dict) or set(scores) != set(dimensions) or any(
         type(score) not in (int, float) or not 0 <= score <= 10 for score in scores.values()
     ):
         raise ValueError("Visual evidence must score every rubric dimension from 0 to 10")
+    return scores, {field: report[field] for field in checks}
+
+
+def visual_result(report: dict, sprite_hash: str, reference_hash: str, comparison_hash: str, stage: int) -> dict:
+    evidence = {"sha256": sprite_hash, "referenceSha256": reference_hash, "comparisonSha256": comparison_hash,
+                "reviewPolicyVersion": REVIEW_POLICY_VERSION}
+    if any(report.get(field) != value for field, value in evidence.items()):
+        raise ValueError("Visual evidence must identify the exact sprite, master and comparison for the current policy")
+    scores, checks = evaluate_scores(report, RUBRIC, stage_checks(stage))
     score = sum(RUBRIC[field] * scores[field] for field in RUBRIC) / 100
-    passed = score >= 9 and min(scores.values()) >= 8 and all(report[field] for field in VISUAL_CHECKS)
-    return {"sha256": technical["sha256"], "referenceSha256": reference_hash,
-            "visualReviewer": report["reviewer"], "notes": report["notes"], "scores": scores,
-            "score": score, "passed": passed, **{field: report[field] for field in VISUAL_CHECKS}}
+    passed = score >= 9 and min(scores.values()) >= 8 and all(checks.values())
+    return {**evidence, "visualReviewer": report["reviewer"], "notes": report["notes"], "scores": scores,
+            "score": score, "passed": passed, **checks}
+
+
+def lineup_result(report: dict, evidence: dict) -> dict:
+    if any(report.get(field) != value for field, value in evidence.items()):
+        raise ValueError("Lineup evidence must identify the exact current stage images, master and comparison")
+    count = len(evidence["stageSha256"])
+    dimensions, flags = lineup_rules(count)
+    scores, checks = evaluate_scores(report, dimensions, flags)
+    score = sum(scores.values()) / len(scores)
+    passed = score >= 9 and min(scores.values()) >= 8 and all(checks.values())
+    revisions = report.get("revisionStages")
+    if (not isinstance(revisions, list)
+            or any(type(stage) is not int or not 1 <= stage <= count for stage in revisions)
+            or len(set(revisions)) != len(revisions)):
+        raise ValueError("revisionStages must contain distinct stage numbers within the lineup")
+    if (passed and revisions) or (not passed and not revisions):
+        raise ValueError("Use revisionStages to identify affected stages only for a rejected lineup")
+    return {**evidence, "reviewer": report["reviewer"], "notes": report["notes"], "scores": scores,
+            "score": score, "passed": passed, "revisionStages": revisions, **checks}
 
 
 def comparison(master: Path, sprite: Path) -> bytes:
+    return _comparison_panels(((master, "Locked master", "#d7d9dc"), (sprite, "Candidate on light", "#f3f3f3"),
+                               (sprite, "Candidate on dark", "#252a36")))
+
+
+def lineup_comparison(master: Path, sprites: list[Path]) -> bytes:
+    return _comparison_panels([(master, "Locked master", "#d7d9dc")] + [
+        (sprite, f"Stage {stage}", "#d7d9dc") for stage, sprite in enumerate(sprites, 1)
+    ])
+
+
+def _comparison_panels(panels) -> bytes:
     panel_width, panel_height = 640, 480
-    sheet = Image.new("RGB", (3 * panel_width, panel_height + 36), "#333333")
-    labels = ((master, "Locked master", "#d7d9dc"),
-              (sprite, "Candidate on light", "#f3f3f3"), (sprite, "Candidate on dark", "#252a36"))
+    sheet = Image.new("RGB", (len(panels) * panel_width, panel_height + 36), "#333333")
     draw = ImageDraw.Draw(sheet)
-    for index, (path, label, color) in enumerate(labels):
+    for index, (path, label, color) in enumerate(panels):
         with Image.open(path) as source:
             art = source.convert("RGBA")
         art.thumbnail((panel_width - 16, panel_height - 16), Image.Resampling.LANCZOS)

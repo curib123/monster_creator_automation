@@ -13,7 +13,9 @@ from tempfile import TemporaryDirectory
 
 from PIL import Image
 
-from .qa import PROCESSING_VERSION, RUBRIC, VISUAL_CHECKS, comparison, normalize, visual_result
+from .archetypes import canonical_text, load_archetypes, validate_design_line
+from .qa import (PROCESSING_VERSION, REVIEW_POLICY_VERSION, RUBRIC, comparison, lineup_comparison,
+                 lineup_result, lineup_rules, normalize, stage_checks, visual_result)
 from .style import PROMPT_VERSION, compile_prompt, verify_master
 
 
@@ -57,32 +59,28 @@ def require_text(record: dict, fields) -> None:
             raise ValueError(f"Missing or empty {field}")
 
 
-def validate_family(family: dict) -> None:
+def validate_family(family: dict, archetypes: dict) -> None:
     if not isinstance(family, dict):
         raise ValueError("Each family must be a JSON object")
-    require_text(family, ("familyId", "displayName", "description", "worldId", "gameElement", "species", "category"))
+    require_text(family, ("familyId", "displayName", "description", "worldId", "gameElement", "category"))
     family_id = family["familyId"]
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", family_id) or re.fullmatch(
         r"con|prn|aux|nul|com[0-9]|lpt[0-9]", family_id
     ):
         raise ValueError("familyId must be a filesystem-safe lowercase identifier")
     category_types = {"Wild": "Common", "Legendary": "Legendary", "Guardian": "AncientGuardian"}
-    if category_types.get(family.get("category", "")) != family.get("monsterType", ""):
+    if family["category"] not in category_types or category_types[family["category"]] != family.get("monsterType"):
         raise ValueError("Category must match its game type: Wild/Common, Legendary/Legendary, or Guardian/AncientGuardian")
     if type(family.get("isNewFamily")) is not bool:
         raise ValueError("isNewFamily must explicitly describe the catalog mapping")
+    if "concept" in family:
+        require_text(family, ("concept",))
     elements = family.get("elements")
     if not isinstance(elements, list) or not elements or any(
         not isinstance(element, str) or not element.strip() for element in elements
     ) or len(elements) != len(set(elements)):
         raise ValueError("elements must contain distinct canonical element IDs")
-    stages = family.get("stages")
-    if not isinstance(stages, list) or not 1 <= len(stages) <= 3:
-        raise ValueError("A production brief must have one to three stages")
-    for number, stage in enumerate(stages, 1):
-        if not isinstance(stage, dict) or type(stage.get("stage")) is not int or stage["stage"] != number:
-            raise ValueError("Stages must be numbered consecutively from 1")
-        require_text(stage, ("name", "title", "description"))
+    validate_design_line(family, archetypes)
 
 
 def latest(job: dict, stage: int) -> dict | None:
@@ -109,6 +107,9 @@ class Workflow:
     def __init__(self, repo: Path, workspace: Path):
         self.repo = repo.resolve()
         self.workspace = workspace.resolve()
+
+    def archetypes(self) -> dict:
+        return load_archetypes(self.repo)
 
     @contextmanager
     def checkpoint(self, *, read_only: bool = False):
@@ -143,22 +144,34 @@ class Workflow:
         plans = plans.get("families", [plans]) if isinstance(plans, dict) else plans
         if not isinstance(plans, list) or not plans:
             raise ValueError("No families found in the supplied brief")
+        archetypes = self.archetypes()
         for family in plans:
-            validate_family(family)
+            validate_family(family, archetypes)
         mass_batch = len(plans) > 7 or len({family["worldId"] for family in plans}) > 1
         style = read_json(self.repo / "references" / "style_manifest.json")
         seen = set()
         with self.checkpoint() as jobs:
             names = {job["brief"]["displayName"].casefold(): key for key, job in jobs.items()}
+            concepts = {}
+            for key, job in jobs.items():
+                brief = job["brief"]
+                concept = brief.get("concept")
+                if not isinstance(concept, str) or not concept.strip():
+                    concept = brief["description"]
+                concepts[canonical_text(concept)] = key
             for family in plans:
                 key = family["familyId"]
                 name = family["displayName"].casefold()
+                concept = canonical_text(family.get("concept") or family["description"])
                 if key in seen:
                     raise ValueError(f"Duplicate production family: {key}")
                 if name in names and names[name] != key:
                     raise ValueError(f"Another production family already uses the name {family['displayName']}")
+                if concept in concepts and concepts[concept] != key:
+                    raise ValueError(f"The family concept for {key} duplicates {concepts[concept]}")
                 seen.add(key)
                 names[name] = key
+                concepts[concept] = key
                 definition = {"brief": family, "size": size, "maxAttempts": max_attempts, "promptVersion": PROMPT_VERSION,
                               "referenceSha256": style["sha256"], "styleVersion": style["version"]}
                 if key in jobs:
@@ -193,12 +206,16 @@ class Workflow:
     def artifact(self, job_id: str, stage: int, attempt: int, name: str) -> Path:
         return self.workspace / "output" / "drafts" / job_id / f"s{stage:02d}" / f"attempt-{attempt}" / name
 
-    def handoff(self, job_id: str, job: dict, stage: int, master: dict | None, mass: bool) -> dict:
+    @staticmethod
+    def require_current_brief(job: dict, archetypes: dict) -> None:
+        if job["promptVersion"] != PROMPT_VERSION:
+            raise ValueError("This job is pinned to a different prompt version and needs a current brief")
+        validate_family(job["brief"], archetypes)
+
+    def handoff(self, job_id: str, job: dict, stage: int, master: dict | None, mass: bool, archetypes: dict) -> dict:
         previous = latest(job, stage)
         if previous and previous["status"] == "requested":
             return {**previous["handoff"], "recovery": True}
-        if job["promptVersion"] != PROMPT_VERSION:
-            raise ValueError("This job is pinned to a different prompt version")
         attempt = len(job["stages"][stage - 1]) + 1
         family_reference = None
         for earlier in reversed(range(1, stage)):
@@ -213,7 +230,7 @@ class Workflow:
         extensions = job.get("retryExtensions", {}).get(str(stage), ())
         if extensions and extensions[-1]["maxAttempts"] == attempt:
             feedback = f"{feedback}\n\nCorrection for this additional attempt: {extensions[-1]['reason']}"
-        prompt = compile_prompt(job["brief"], stage, feedback)
+        prompt = compile_prompt(job["brief"], stage, archetypes, feedback)
         return {"job": job_id, "stage": stage, "attempt": attempt,
                 "requestId": f"{job_id}:s{stage:02d}:a{attempt}", "prompt": prompt, "promptVersion": job["promptVersion"],
                 "reference": str(self.repo / master["reference_path"]) if master else None,
@@ -230,8 +247,9 @@ class Workflow:
 
     def resume(self, job_id: str | None, limit: int, world_id: str | None = None, rejected_only: bool = False) -> dict:
         eligible, requests = [], []
-        blockers = {}
+        blockers, brief_blockers = {}, {}
         with self.checkpoint(read_only=True) as jobs:
+            archetypes = self.archetypes()
             try:
                 verified = verify_master(self.repo)
                 missing = None
@@ -254,6 +272,11 @@ class Workflow:
                         self.require_job_master(job, verified)
                     except ValueError as error:
                         blockers[key] = str(error)
+                try:
+                    self.require_current_brief(job, archetypes)
+                except ValueError as error:
+                    brief_blockers[key] = str(error)
+                    continue
                 for stage in next_stages:
                     prior_review = self.has_prior_review(job, stage)
                     priority = (not prior_review, phase(job, stage) != "requested")
@@ -261,14 +284,16 @@ class Workflow:
             for _, key, stage, prior_review in sorted(eligible)[:limit]:
                 master = None if key in blockers else verified
                 job = jobs[key]
-                request = self.handoff(key, job, stage, master, self.needs_mass_authorization(jobs, job))
+                request = self.handoff(key, job, stage, master, self.needs_mass_authorization(jobs, job), archetypes)
                 requests.append({**request, "reference": request["reference"] if master else None,
                                  "ready": master is not None and prior_review, "needsPriorStageReview": not prior_review})
-        return {"requests": requests, "masterBlockers": blockers}
+        return {"requests": requests, "masterBlockers": blockers, "briefBlockers": brief_blockers}
 
     def request(self, job_id: str, stage: int, authorization: str | None) -> dict:
         with self.checkpoint() as jobs:
             job = self.selected(jobs, job_id)[job_id]
+            archetypes = self.archetypes()
+            self.require_current_brief(job, archetypes)
             current = phase(job, stage)
             if current not in ("pending", "requested"):
                 raise ValueError(f"Stage {stage} cannot start generation from {current}")
@@ -276,7 +301,7 @@ class Workflow:
             if not self.has_prior_review(job, stage):
                 raise ValueError("Review the previous stage before generating the next family stage")
             mass = self.needs_mass_authorization(jobs, job)
-            handoff = self.handoff(job_id, job, stage, master, mass)
+            handoff = self.handoff(job_id, job, stage, master, mass, archetypes)
             if current == "pending":
                 if mass and (not authorization or not authorization.strip()):
                     raise ValueError("Owner authorization is required to start a mass-production batch")
@@ -323,6 +348,7 @@ class Workflow:
         original, receipt = source.read_bytes(), read_json(receipt_path)
         with self.checkpoint() as jobs:
             job = self.selected(jobs, job_id)[job_id]
+            self.require_current_brief(job, self.archetypes())
             master = self.master(job)
             target = self.inflight(job, stage, number)
             handoff = target["handoff"]
@@ -389,6 +415,7 @@ class Workflow:
 
     def review(self, job_id: str, stage: int | None) -> dict:
         candidates = []
+        lineup = None
         with self.checkpoint() as jobs:
             job = self.selected(jobs, job_id)[job_id]
             master = self.master(job)
@@ -399,14 +426,47 @@ class Workflow:
                 revision = attempt["number"]
                 sprite = self.artifact(job_id, number, revision, "sprite.png")
                 verified_bytes(sprite, attempt["technical"]["sha256"])
-                preview = self.artifact(job_id, number, revision, "comparison.png")
-                write_once(preview, comparison(self.repo / master["reference_path"], sprite))
+                preview = self.artifact(job_id, number, revision, f"comparison-v{REVIEW_POLICY_VERSION}.png")
+                if "comparisonSha256" in attempt:
+                    verified_bytes(preview, attempt["comparisonSha256"])
+                else:
+                    data = comparison(self.repo / master["reference_path"], sprite)
+                    write_once(preview, data)
+                    attempt["comparisonSha256"] = sha256(data).hexdigest()
                 template = {"sha256": attempt["technical"]["sha256"], "referenceSha256": master["sha256"],
+                            "comparisonSha256": attempt["comparisonSha256"], "reviewPolicyVersion": REVIEW_POLICY_VERSION,
                             "reviewer": "", "notes": "", "scores": dict.fromkeys(RUBRIC),
-                            **dict.fromkeys(VISUAL_CHECKS)}
+                            **dict.fromkeys(stage_checks(number))}
                 candidates.append({"stage": number, "status": attempt["status"], "sprite": str(sprite),
                                    "preview": str(preview), "reviewTemplate": template})
-        return {"job": job_id, "master": str(self.repo / master["reference_path"]), "candidates": candidates}
+            if stage is None and all(phase(job, number) in ("visual_pass", "approved")
+                                     for number in range(1, len(job["stages"]) + 1)):
+                scope = self.lineup_scope(job_id, job, master)
+                evidence = job.get("lineupPreview", {})
+                if all(evidence.get(field) == value for field, value in scope.items()):
+                    digest = evidence["comparisonSha256"]
+                    preview = self.lineup_preview(job_id, digest)
+                    verified_bytes(preview, digest)
+                else:
+                    sprites = [Path(item["sprite"]) for item in candidates]
+                    data = lineup_comparison(self.repo / master["reference_path"], sprites)
+                    digest = sha256(data).hexdigest()
+                    preview = self.lineup_preview(job_id, digest)
+                    write_once(preview, data)
+                    evidence = job["lineupPreview"] = {**scope, "comparisonSha256": digest}
+                dimensions, checks = lineup_rules(len(scope["stageSha256"]))
+                template = {**evidence, "reviewer": "", "notes": "", "scores": dict.fromkeys(dimensions),
+                            "revisionStages": [], **dict.fromkeys(checks)}
+                lineup = {"preview": str(preview), "reviewTemplate": template}
+        return {"job": job_id, "master": str(self.repo / master["reference_path"]), "candidates": candidates, "lineup": lineup}
+
+    def stage_comparison_hash(self, job_id: str, stage: int, attempt: dict) -> str:
+        digest = attempt.get("comparisonSha256")
+        if not digest:
+            raise ValueError("Prepare the comparison with review before recording visual evidence")
+        preview = self.artifact(job_id, stage, attempt["number"], f"comparison-v{REVIEW_POLICY_VERSION}.png")
+        verified_bytes(preview, digest)
+        return digest
 
     def record_review(self, job_id: str, stage: int, report_path: Path) -> dict:
         report = read_json(report_path)
@@ -418,41 +478,118 @@ class Workflow:
             attempt = latest(job, stage)
             if not attempt or attempt["status"] != "technical_pass":
                 raise ValueError("The latest stage must have a pending visual review")
-            if not self.artifact(job_id, stage, attempt["number"], "comparison.png").is_file():
-                raise ValueError("Prepare the comparison with review before recording visual evidence")
-            verified_bytes(self.artifact(job_id, stage, attempt["number"], "sprite.png"), attempt["technical"]["sha256"])
-            result = visual_result(report, attempt["technical"], master["sha256"])
+            digest = attempt["technical"]["sha256"]
+            verified_bytes(self.artifact(job_id, stage, attempt["number"], "sprite.png"), digest)
+            result = visual_result(report, digest, master["sha256"], self.stage_comparison_hash(job_id, stage, attempt), stage)
             result["reviewed"] = stamp()
             if result["passed"]:
                 attempt.update(status="visual_pass", visual=result)
             else:
-                failed = [field for field in VISUAL_CHECKS if not result[field]]
+                failed = [field for field in stage_checks(stage) if not result[field]]
                 feedback = f"Visual rejection, weighted score {result['score']:.2f}. "
                 if failed:
                     feedback += f"Failed checks: {', '.join(failed)}. "
                 attempt.update(status="rejected", reason=feedback + result["notes"], visual=result)
             return {"stage": stage, "status": attempt["status"], "nextPhase": phase(job, stage), "result": result}
 
+    def lineup_scope(self, job_id: str, job: dict, master: dict) -> dict:
+        stage_hashes = {}
+        for stage in range(1, len(job["stages"]) + 1):
+            attempt = latest(job, stage)
+            if not attempt or attempt["status"] not in ("visual_pass", "approved"):
+                raise ValueError("All planned stages must pass visual review before lineup review and owner approval")
+            stage_hashes[str(stage)] = self.passed_stage_review(job_id, stage, attempt, master)
+        return {"stageSha256": stage_hashes, "referenceSha256": master["sha256"],
+                "archetypeId": job["brief"]["archetypeId"], "reviewPolicyVersion": REVIEW_POLICY_VERSION}
+
+    def passed_stage_review(self, job_id: str, stage: int, attempt: dict, master: dict) -> str:
+        digest, report = attempt["technical"]["sha256"], attempt["visual"]
+        verified_bytes(self.artifact(job_id, stage, attempt["number"], "sprite.png"), digest)
+        result = visual_result({**report, "reviewer": report["visualReviewer"]}, digest, master["sha256"],
+                               self.stage_comparison_hash(job_id, stage, attempt), stage)
+        if not result["passed"] or any(report.get(field) != value for field, value in result.items()):
+            raise ValueError(f"Stage {stage} requires a passing review under the current visual policy")
+        return digest
+
+    def lineup_preview(self, job_id: str, digest: str) -> Path:
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("Invalid lineup comparison SHA-256")
+        return self.workspace / "output" / "drafts" / job_id / f"lineup-{digest}.png"
+
+    def lineup_evidence(self, job_id: str, job: dict, master: dict) -> dict:
+        scope = self.lineup_scope(job_id, job, master)
+        evidence = job.get("lineupPreview", {})
+        if any(evidence.get(field) != value for field, value in scope.items()):
+            raise ValueError("Run review for the entire family to prepare the current lineup comparison")
+        verified_bytes(self.lineup_preview(job_id, evidence["comparisonSha256"]), evidence["comparisonSha256"])
+        return evidence
+
+    def record_lineup(self, job_id: str, report_path: Path) -> dict:
+        report = read_json(report_path)
+        if not isinstance(report, dict):
+            raise ValueError("Lineup evidence must be a JSON object")
+        with self.checkpoint() as jobs:
+            job = self.selected(jobs, job_id)[job_id]
+            master = self.master(job)
+            reviews = job.setdefault("lineupReviews", [])
+            if reviews and reviews[-1]["passed"]:
+                raise ValueError("The passing lineup review is immutable")
+            result = lineup_result(report, self.lineup_evidence(job_id, job, master))
+            result["reviewed"] = stamp()
+            reviews.append(result)
+            for stage in result["revisionStages"]:
+                failed = latest(job, stage)
+                failed.update(status="rejected", reason=f"Whole-family visual rejection: {result['notes']}")
+            return {"job": job_id, "result": result}
+
+    def passed_lineup(self, job_id: str, job: dict, master: dict) -> dict:
+        reviews = job.get("lineupReviews", [])
+        if not reviews or not reviews[-1]["passed"]:
+            raise ValueError("A passing whole-family lineup review is required before owner approval and export")
+        report = reviews[-1]
+        evidence = self.lineup_evidence(job_id, job, master)
+        result = lineup_result(report, evidence)
+        if not result["passed"] or any(report.get(field) != value for field, value in result.items()):
+            raise ValueError("The passing lineup review must match the current stage images and visual policy")
+        return report
+
     def approve(self, job_id: str, owner: str, authorization: str) -> dict:
         decision = {"reviewer": owner, "authorization": authorization}
         require_text(decision, ("reviewer", "authorization"))
         with self.checkpoint() as jobs:
             job = self.selected(jobs, job_id)[job_id]
-            self.master(job)
+            master = self.master(job)
+            validate_family(job["brief"], self.archetypes())
+            lineup = self.passed_lineup(job_id, job, master)
+            decision["familyReviewSha256"] = sha256(json_bytes(lineup)).hexdigest()
             for stage in range(1, len(job["stages"]) + 1):
                 attempt = latest(job, stage)
-                if not attempt or attempt["status"] not in ("visual_pass", "approved"):
-                    raise ValueError("All planned stages must pass visual review before owner approval")
-                if attempt.get("approval") and any(attempt["approval"][field] != value for field, value in decision.items()):
+                if attempt.get("approval") and any(attempt["approval"].get(field) != value for field, value in decision.items()):
                     raise ValueError("The existing owner's decision is immutable")
-                verified_bytes(self.artifact(job_id, stage, attempt["number"], "sprite.png"), attempt["technical"]["sha256"])
                 if attempt["status"] == "visual_pass":
                     attempt.update(status="approved", approval={**decision, "approvedAt": stamp()})
             return {"job": job_id, "approvedStages": len(job["stages"])}
 
+    @staticmethod
+    def revision_reason(job: dict, style: dict) -> str | None:
+        if (style["sha256"], style["version"]) != (job["referenceSha256"], job["styleVersion"]):
+            return "Master artwork changed. Review retained artwork against the current master and revise before production."
+        records = [attempts[-1] for attempts in job["stages"] if attempts]
+        if any("visual" in record and record["visual"].get("reviewPolicyVersion") != REVIEW_POLICY_VERSION
+               for record in records):
+            return "A stage review predates the current visual quality gate."
+        reviews = job.get("lineupReviews", [])
+        if any(record["status"] == "approved" for record in records) and (
+            not reviews or reviews[-1].get("reviewPolicyVersion") != REVIEW_POLICY_VERSION
+        ):
+            return "Owner approval predates the required whole-family review."
+        return None
+
     def status(self, job_id: str | None, world_id: str | None = None, validate: bool = False) -> dict:
         families, totals, worlds = {}, Counter(), {}
+        master = None
         with self.checkpoint(read_only=True) as jobs:
+            style = read_json(self.repo / "references" / "style_manifest.json") if jobs else None
             for key, job in self.selected(jobs, job_id).items():
                 world = job["brief"]["worldId"]
                 if world_id is not None and world_id != world:
@@ -461,41 +598,76 @@ class Workflow:
                 category_totals = worlds.setdefault(world, {}).setdefault(category, Counter())
                 category_totals["plannedFamilies"] += 1
                 stages = []
+                revision_reason = self.revision_reason(job, style)
+                reviews = job.get("lineupReviews", [])
                 for stage in range(1, len(job["stages"]) + 1):
                     record = latest(job, stage) or {}
-                    status = phase(job, stage)
+                    prior_phase = phase(job, stage)
+                    status = "revision_required" if revision_reason and "sourceSha256" in record else prior_phase
                     totals[status] += 1
                     generated = any("sourceSha256" in item for item in job["stages"][stage - 1])
                     category_totals.update({"plannedStages": 1, "generatedStages": int(generated),
                                             "approvedStages": int(status == "approved"),
                                             "exportedStages": int(bool(record.get("exports")))})
                     if validate and "technical" in record:
-                        verified_bytes(self.artifact(key, stage, record["number"], "sprite.png"), record["technical"]["sha256"])
+                        if status in ("approved", "visual_pass"):
+                            master = master or verify_master(self.repo)
+                            self.passed_stage_review(key, stage, record, master)
+                        else:
+                            verified_bytes(self.artifact(key, stage, record["number"], "sprite.png"), record["technical"]["sha256"])
                     stages.append({"stage": stage, "status": status, "attempts": record.get("number", 0),
                                    "maxAttempts": attempt_limit(job, stage),
                                    "retryExtensions": job.get("retryExtensions", {}).get(str(stage), []),
                                    "reason": record.get("reason"), "score": record.get("visual", {}).get("score"),
                                    "exports": record.get("exports", []), "generated": generated})
+                    if status != prior_phase:
+                        stages[-1]["checkpointStatus"] = prior_phase
                 families[key] = {"worldId": world, "monsterType": category, "stages": stages}
+                if revision_reason:
+                    families[key]["revisionRequired"] = revision_reason
+                if reviews:
+                    families[key]["lineupReview"] = reviews[-1]
+                if validate and not revision_reason and reviews and reviews[-1]["passed"]:
+                    master = master or verify_master(self.repo)
+                    self.passed_lineup(key, job, master)
         return {"totals": dict(totals), "worlds": worlds, "jobs": families}
 
     def export(self, job_id: str | None) -> dict:
         with self.checkpoint() as jobs:
             files, sprites, families, revisions = {}, {}, [], []
+            master, skipped = None, {}
+            style = read_json(self.repo / "references" / "style_manifest.json") if jobs else None
             for key, job in self.selected(jobs, job_id).items():
+                revision_reason = self.revision_reason(job, style)
+                if revision_reason:
+                    if job_id is not None:
+                        raise ValueError(f"Unity export requires revision: {revision_reason}")
+                    skipped[key] = revision_reason
+                    continue
                 if any(phase(job, index) != "approved" for index in range(1, len(job["stages"]) + 1)):
                     if job_id is not None:
                         raise ValueError("Unity export requires owner approval for every planned stage")
                     continue
-                master = self.master(job)
+                master = master or verify_master(self.repo)
+                self.require_job_master(job, master)
                 brief = job["brief"]
+                validate_family(brief, self.archetypes())
+                lineup = self.passed_lineup(key, job, master)
+                lineup_hash = sha256(json_bytes(lineup)).hexdigest()
                 family = {field: brief[field] for field in ("familyId", "displayName", "description", "worldId",
-                                                           "gameElement", "monsterType", "isNewFamily", "learnsetElement")
+                                                           "gameElement", "monsterType", "isNewFamily", "learnsetElement",
+                                                           "archetypeId")
                           if field in brief}
+                preview = f"reviews/{key}-lineup.png"
+                comparison_hash = lineup["comparisonSha256"]
+                files[preview] = verified_bytes(self.lineup_preview(key, comparison_hash), comparison_hash)
+                family.update(lineupReview=lineup, lineupPreviewPath=preview)
                 family["stages"] = []
                 for spec in brief["stages"]:
                     stage = spec["stage"]
                     attempt = latest(job, stage)
+                    if attempt["approval"].get("familyReviewSha256") != lineup_hash:
+                        raise ValueError("Owner approval must identify the exact passing lineup review")
                     technical = attempt["technical"]
                     name = f"{key}_s{stage:02d}"
                     path, review_path = f"sprites/{name}.png", f"reviews/{name}.json"
@@ -510,7 +682,7 @@ class Workflow:
                 families.append(family)
             if not families:
                 raise ValueError("No owner-approved families to export")
-            manifest = {"schemaVersion": 1, "styleVersion": master["version"],
+            manifest = {"schemaVersion": 1, "styleVersion": master["version"], "reviewPolicyVersion": REVIEW_POLICY_VERSION,
                         "referenceSha256": master["sha256"], "families": sorted(families, key=lambda item: item["familyId"])}
             files["manifest.json"] = json_bytes(manifest)
             parent = self.workspace / "output" / "unity"
@@ -535,4 +707,7 @@ class Workflow:
                 packages = attempt.setdefault("exports", [])
                 if package.name not in packages:
                     packages.append(package.name)
-            return {"manifest": str(package / "manifest.json"), "families": len(families), "stages": len(revisions)}
+            result = {"manifest": str(package / "manifest.json"), "families": len(families), "stages": len(revisions)}
+            if skipped:
+                result["skippedRevisionRequired"] = skipped
+            return result

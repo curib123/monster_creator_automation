@@ -1,18 +1,19 @@
 {
-  "version": "1.1.0",
+  "version": "2.0.0",
   "status": "owner-approved-reference",
   "reference_path": "references/master_style.png",
-  "original_filename": "Aqua and Flame Evolution Line.png",
-  "sha256": "55f0908d04367b514acc53a3bdb89a25322829cfd1885ac907beb17f4f245cb0",
-  "width": 1447,
-  "height": 1087,
+  "original_filename": "master_style_three_elements_stages_1-3.png",
+  "sha256": "09d5843a8660ef8200f2e171e8cab8a17d6048b37de31ea745a3cb10006ce6ba",
+  "width": 1054,
+  "height": 1427,
+  "format": "PNG",
   "mode": "RGBA",
-  "bytes": 1946740,
+  "bytes": 1846900,
   "alpha_range": [
     0,
     255
   ],
-  "source": "Owner-supplied PNG explicitly approved as the new locked master on 2026-11-26",
+  "source": "Owner-supplied original PNG designated as the permanent master on 2026-11-27",
   "require_exact_hash": true,
   "art_bible": "docs/art-bible.md"
 }

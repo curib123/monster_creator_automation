@@ -1,6 +1,6 @@
-"""Verdant Reach concepts based on the saved Aevareth artwork and stage names."""
+"""Historical Verdant Reach briefs retained for identifying legacy designs in catalog reports."""
 
-# Species, family continuity and stage-specific visual instructions.
+# Legacy anatomy, identity notes and stage history. Current generation never uses these drafts.
 VERDANT_DESIGNS = {
     "leafkit": (
         "leaf caterpillar, hanging chrysalis, and blossom moth",

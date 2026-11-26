@@ -1,16 +1,31 @@
 # Instructions for Codex
 
-Read PLAN.md before implementing or generating any monster. Treat its visual contract as mandatory. The root repository is a reusable monster asset factory.
+Read [PLAN.md](PLAN.md), the [art bible](docs/art-bible.md), and the
+[review requirements](docs/evolution-quality.md) before changing the workflow
+or making artwork. Follow the [monster-creator skill](.agents/skills/monster-creator/SKILL.md)
+for asset jobs.
 
-- Maximum 3 evolution stages, default 3; all left-facing front three-quarter view. Keep individual transparent RGBA sprites and same family visual identity.
-- Use references/master_style.png as the locked owner-approved artwork reference. If missing, fail clearly for real generation and continue offline implementation/testing; never substitute another style.
-- Vary animal, insect, plant and fantasy anatomy and elemental properties. Preserve the master rendering language; do not reproduce third-party characters.
-- Use a real authorized image-generation tool/API or manual handoff; do not fabricate outputs or claim mock art is production. Verify the current provider capabilities in official docs. Do not automate website usage or circumvent limits.
-- Do not spend money without an explicit budget and authorization. Never commit credentials. Keep rejected assets out of exports. Human visual approval required.
-- Read .agents/skills/monster-creator/SKILL.md for asset jobs. Keep PLAN.md current; run tests and report blockers. Do not modify unrelated game repositories or overwrite approved assets without approval.
-
-**25-world integration:** Support 24 campaign worlds and one endless convergence world. Read the authoritative local game catalog and element registry, preserve distinct element IDs and asset keys, support hybrids and report coverage for every world. See PLAN.md. Never hard-code a one-world-per-element assumption.
-
-**Mandatory world roster:** Exactly 5 Wild + 1 Legendary + 1 Guardian dedicated unique families per world, including the endless world. For 25 worlds: 125 Wild, 25 Legendary, 25 Guardian = 175 families; default 3 stages and maximum 3, up to 525 individual transparent sprites. Track quotas and category-specific design briefs; no duplicates across dedicated rosters. See PLAN.md. Do not assume generation is complete without approved outputs.
-
-**Locked artwork reference:** Read `docs/art-bible.md` and verify `references/master_style.png` against `references/style_manifest.json` before generation. Use actual reference-image conditioning and compare all outputs visually to the master. Reject style drift. Follow the README to install the exact owner-approved file if it is missing.
+- Verify the owner-approved `references/master_style.png` against
+  `references/style_manifest.json` before production. Use the exact PNG as an
+  image input and compare every candidate visually with it. A missing or
+  changed file blocks generation and approval. An owner-authorized reference
+  update must update the lock and the artwork together.
+- Use one canonical approved archetype from `config/species.yaml` per family.
+  Create original designs with natural anatomy and a purposeful progression
+  across one to three stages. Each production sprite is a full-body,
+  left-facing front three-quarter RGBA PNG with transparent background.
+- Read the authoritative Aevareth catalog. Preserve world, element, family
+  and stage identities. Plan five Wild, one Legendary and one Guardian in
+  each of 25 worlds, for 175 distinct families and up to 525 stage sprites.
+  Retain existing artwork and report incompatible inherited designs for review.
+- Use a real reference-capable and authorized image tool or a manual handoff.
+  Confirm the provider received the input. Keep request provenance, immutable
+  attempts and bounded retries. A paid backend requires an authorized budget.
+  Keep credentials out of Git.
+- Require technical checks and an actual visual evaluation of each stage and
+  the complete family against the current master. Export only after the
+  owner's explicit family approval. Obtain separate authorization for mass
+  production or replacement of existing production art. Use the game's
+  reviewed-family import handoff for any authorized Unity update.
+- Keep implementation and documentation current. Run offline tests, report
+  unresolved gaps and keep unrelated game files and checkpoint history intact.

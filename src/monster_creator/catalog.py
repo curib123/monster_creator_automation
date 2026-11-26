@@ -7,6 +7,7 @@ import re
 import struct
 import subprocess
 
+from .archetypes import canonical_text, load_archetypes, validate_design_line
 from .roster_designs import ORIGIN_ELEMENTS, PROPOSED_HYBRIDS, ROSTER_DESIGNS
 from .verdant import VERDANT_DESIGNS
 
@@ -303,6 +304,9 @@ def coverage(catalog, designs=()):
         "missingDesignSlots": sum(sum(row["missingDesignSlots"].values()) for row in worlds),
         "missingSpriteFiles": catalog.get("missingSpriteFiles", []),
         "unassignedFamilies": unassigned,
+        "legacyArchetypeReview": {
+            family["familyId"]: legacy_archetype_status(family) for family in catalog["families"]
+        },
         "worlds": worlds,
     }
 
@@ -314,7 +318,7 @@ def choose_world(catalog, selector):
     return matches[0]
 
 
-def default_designs(catalog):
+def default_designs(catalog, archetypes):
     assigned, _ = home_assignments(catalog)
     elements = {row["id"]: row["gameElement"] for row in catalog["elements"]}
     proposals = []
@@ -325,7 +329,7 @@ def default_designs(catalog):
         for category, candidates in choices.items():
             candidates = candidates if category == "Wild" else (candidates,)
             open_count = QUOTAS[category] - counts[category]
-            for name, species, motif, *beats in candidates:
+            for name, archetype, motif, first, second, third in candidates:
                 family_id = name.lower()
                 if open_count <= 0 or any(row["familyId"] == family_id for row in assigned[home]):
                     continue
@@ -341,7 +345,8 @@ def default_designs(catalog):
                     "familyId": family_id,
                     "displayName": name,
                     "description": motif,
-                    "species": species,
+                    "archetypeId": archetype,
+                    "identityAnchors": motif,
                     "worldId": home,
                     "category": category,
                     "gameElement": elements[element],
@@ -349,16 +354,21 @@ def default_designs(catalog):
                     "isNewFamily": True,
                     "elements": list(components),
                     "componentSource": component_source,
-                    "stages": [{"stage": number, "name": name, "title": title,
-                                "description": f"Show {beat}. {motif}"}
-                               for number, (title, beat) in enumerate(zip(("Young", "Growing", "Mature"), beats, strict=True), 1)],
+                    "stages": [
+                        {"stage": 1, "name": name, "title": "Young", "description": first},
+                        {"stage": 2, "name": name, "title": "Growing", "description": second[0],
+                         "transitionRationale": second[1]},
+                        {"stage": 3, "name": name, "title": "Mature", "description": third[0],
+                         "transitionRationale": third[1]},
+                    ],
                 })
-    return validate_designs(catalog, proposals)
+    return validate_designs(catalog, proposals, archetypes)
 
 
-def validate_designs(catalog, designs):
+def validate_designs(catalog, designs, archetypes):
     ids = {row["familyId"] for row in catalog["families"]}
     names = {row["displayName"].casefold() for row in catalog["families"]}
+    concepts = set()
     elements = {row["id"]: row["gameElement"] for row in catalog["elements"]}
     worlds = unique(catalog["worlds"], "id", "world")
     assigned, _ = home_assignments(catalog)
@@ -391,68 +401,41 @@ def validate_designs(catalog, designs):
         else:
             require(element == "hybrid" and (not world["components"] or set(supplied) == set(world["components"])),
                     f"Wrong world hybrid: {family_id}")
-        stages = design["stages"]
-        require(1 <= len(stages) <= 3 and [row["stage"] for row in stages] == list(range(1, len(stages) + 1)),
-                f"Expected one to three sequential stages: {family_id}")
-        require(all(isinstance(design[key], str) and design[key].strip() for key in ("description", "species"))
-                and all(all(isinstance(row[key], str) and row[key].strip() for key in ("name", "title", "description"))
-                        for row in stages), f"Missing visual design brief: {family_id}")
+        validate_design_line(design, archetypes)
+        concept = design.get("concept", design.get("description"))
+        require(isinstance(concept, str) and concept.strip(), f"Missing visual design concept: {family_id}")
+        concept = canonical_text(concept)
+        require(concept not in concepts, f"Duplicate family concept: {family_id}")
+        concepts.add(concept)
         ids.add(family_id)
         names.add(name)
     return designs
 
 
-def existing_brief(row, world, elements):
-    family_id = row["familyId"]
-    if family_id not in VERDANT_DESIGNS:
-        return None
-    species, design, notes = VERDANT_DESIGNS[family_id]
-    stages = row["stages"]
-    require(len(stages) == len(notes), f"Existing stage count changed for {family_id}")
-    return {
-        "familyId": family_id,
-        "displayName": row["displayName"],
-        "description": row["description"],
-        "worldId": world["id"],
-        "gameElement": elements[row["element"]],
-        "category": row["category"],
-        "monsterType": row["monsterType"],
-        "isNewFamily": False,
-        "species": species,
-        "elements": world["components"] or [row["element"]],
-        "design": design,
-        "stages": [{**{key: stage[key] for key in ("stage", "name", "title")},
-                    "description": note,
-                    **({"anchor": "floating"} if (family_id == "kodorei" or family_id == "leafkit" and stage["stage"] == 3) else {})}
-                   for stage, note in zip(stages, notes, strict=True)],
-        "existingStages": stages,
-        "identitySource": row["identitySource"],
-    }
+def legacy_archetype_status(family):
+    historical = VERDANT_DESIGNS.get(family["familyId"])
+    if historical:
+        return {"status": "requires-migration-plan", "legacyIdentity": historical[0]}
+    return {"status": "needs-visual-classification"}
 
 
-def plan(catalog, worlds, designs):
-    validate_designs(catalog, designs)
+def plan(catalog, worlds, designs, archetypes):
+    validate_designs(catalog, designs, archetypes)
     assigned, _ = home_assignments(catalog)
-    elements = {row["id"]: row["gameElement"] for row in catalog["elements"]}
     report = coverage(catalog, designs)
     coverage_by_world = {row["id"]: row for row in report["worlds"]}
     jobs = []
     families = []
     for world in worlds:
         home = world["id"]
-        approved = []
-        for existing in assigned[home]:
-            brief = existing_brief(existing, world, elements)
-            if brief is not None:
-                families.append(brief)
-            else:
-                approved.append(existing["familyId"])
+        existing = assigned[home]
         additions = [row for row in designs if row["worldId"] == home]
         families.extend(additions)
         jobs.append({
             "worldId": home,
-            "existingFamiliesWithoutDraftBrief": approved,
-            "familyIds": [row["familyId"] for row in families if row["worldId"] == home],
+            "existingFamiliesWithoutDraftBrief": [row["familyId"] for row in existing],
+            "legacyArchetypeReview": {row["familyId"]: legacy_archetype_status(row) for row in existing},
+            "familyIds": [row["familyId"] for row in additions],
             "existingFamilies": coverage_by_world[home]["existingFamilies"],
             "plannedFamilies": coverage_by_world[home]["plannedFamilies"],
             "missingDesignSlots": coverage_by_world[home]["missingDesignSlots"],
@@ -471,16 +454,16 @@ def catalog_source(args):
     )}}
 
 
-def read_designs(args, catalog):
+def read_designs(args, catalog, archetypes):
     if args.designs is None:
-        return default_designs(catalog)
+        return default_designs(catalog, archetypes)
     data = load_json(args.designs)
-    return validate_designs(catalog, data["families"] if isinstance(data, dict) else data)
+    return validate_designs(catalog, data["families"] if isinstance(data, dict) else data, archetypes)
 
 
 def catalog_coverage(args):
     catalog = validate_catalog(load_json(args.catalog))
-    report = coverage(catalog, read_designs(args, catalog))
+    report = coverage(catalog, read_designs(args, catalog, load_archetypes(args.repo)))
     if args.output:
         save_json(args.output, report)
     return report
@@ -488,8 +471,9 @@ def catalog_coverage(args):
 
 def catalog_plan(args):
     catalog = validate_catalog(load_json(args.catalog))
+    archetypes = load_archetypes(args.repo)
     worlds = catalog["worlds"] if args.all else [choose_world(catalog, args.world)]
-    roster = plan(catalog, worlds, read_designs(args, catalog))
+    roster = plan(catalog, worlds, read_designs(args, catalog, archetypes), archetypes)
     require(not args.require_complete or all(not any(row["missingDesignSlots"].values()) and
                                             not any(row["excessFamilies"].values()) for row in roster["worlds"]),
             "Roster coverage is incomplete; inspect catalog coverage for missing or excess families")
