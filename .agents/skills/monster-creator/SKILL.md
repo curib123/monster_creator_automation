@@ -13,3 +13,5 @@ Read root AGENTS.md and PLAN.md. Use the reference image at references/master_st
 5. Validate each stage's alpha, bounds, padding, count, anatomy, facing, art consistency, elemental readability and visual originality. Do not accept wrong-facing images. Retry only failed stages within budget.
 6. Produce a preview for owner review. On explicit approval export individual RGBA PNGs, manifest, pivots and hashes using stable names. Keep rejected files and approved revisions separate.
 7. Report generated vs pending counts, QA results, costs if known, file locations and blockers. Never imply legal clearance or exact style matching is guaranteed.
+
+**25-world integration:** Support 24 campaign worlds and one endless convergence world. Read the authoritative local game catalog and element registry, preserve distinct element IDs and asset keys, support hybrids and report coverage for every world. See PLAN.md. Never hard-code a one-world-per-element assumption.
