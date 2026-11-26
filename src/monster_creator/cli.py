@@ -7,7 +7,7 @@ import sqlite3
 import sys
 
 from .catalog import add_commands as add_catalog_commands
-from .pipeline import Workflow
+from .pipeline import MAX_ATTEMPTS, Workflow
 from .style import verify_master
 
 
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     prepare = commands.add_parser("prepare", help="Create immutable family checkpoints from an offline JSON brief")
     prepare.add_argument("--brief", required=True, type=Path)
-    prepare.add_argument("--max-attempts", type=integer_between(1, 10), default=3)
+    prepare.add_argument("--max-attempts", type=integer_between(1, MAX_ATTEMPTS), default=3)
     prepare.add_argument("--size", type=int, choices=(512, 1024, 2048), default=1024)
     prepare.set_defaults(run=lambda workflow, args: workflow.prepare(args.brief, args.max_attempts, args.size))
     doctor = commands.add_parser("doctor", help="Verify the exact owner-approved artwork and metadata")
@@ -46,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     fail = commands.add_parser("fail", help="Record a confirmed provider error and release the stage for a bounded retry")
     fail.add_argument("--reason", required=True)
     fail.set_defaults(run=lambda workflow, args: workflow.fail(args.job, args.stage, args.attempt, args.reason))
+    extend = commands.add_parser("extend-retry", help="Record one additional retry for one exhausted stage")
+    extend.add_argument("--reason", required=True)
+    extend.set_defaults(run=lambda workflow, args: workflow.extend_retry(args.job, args.stage, args.reason))
     ingest = commands.add_parser("ingest", help="Record the real provider result and run deterministic sprite QA")
     ingest.add_argument("--image", type=Path, required=True)
     ingest.add_argument("--receipt", type=Path, required=True)
@@ -62,12 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--owner", required=True)
     approve.add_argument("--authorization", required=True)
     approve.set_defaults(run=lambda workflow, args: workflow.approve(args.job, args.owner, args.authorization))
-    for command in (request, fail, ingest, reprocess, review, record, approve):
+    for command in (request, fail, extend, ingest, reprocess, review, record, approve):
         command.add_argument("--job", required=True)
-    for command in (request, fail, ingest, reprocess, record):
+    for command in (request, fail, extend, ingest, reprocess, record):
         command.add_argument("--stage", required=True, type=integer_between(1, 3))
     for command in (fail, ingest, reprocess):
-        command.add_argument("--attempt", required=True, type=integer_between(1, 10))
+        command.add_argument("--attempt", required=True, type=integer_between(1, MAX_ATTEMPTS))
 
     status = commands.add_parser("status", help="Report production progress by family, stage and world")
     status.add_argument("--job")

@@ -123,6 +123,50 @@ def test_checkpoint_is_single_request_under_concurrency_and_has_bounded_retries(
         workflow.request("test_moth", 1, None)
 
 
+def test_extend_retry_reopens_one_exhausted_stage_and_preserves_its_evidence(workflow, capsys):
+    prepare(workflow, family(2), attempts=1)
+    request = workflow.request("test_moth", 1, None)
+    with pytest.raises(ValueError, match="exhausted stage"):
+        workflow.extend_retry("test_moth", 1, "Wait until this request finishes.")
+    rejected = ingest(workflow, request, "yellow", background="red")
+    assert rejected["nextPhase"] == "exhausted"
+    raw = workflow.artifact("test_moth", 1, 1, "raw.png")
+    proof = workflow.artifact("test_moth", 1, 1, "provenance.json")
+    original_raw, original_proof = raw.read_bytes(), proof.read_bytes()
+
+    correction = "Leave a clean alpha-zero background around the full creature."
+    assert main(["--repo", str(workflow.repo), "extend-retry", "--job", "test_moth", "--stage", "1",
+                 "--reason", correction]) == 0
+    assert '"maxAttempts": 2' in capsys.readouterr().out
+    with pytest.raises(ValueError, match="exhausted stage"):
+        workflow.extend_retry("test_moth", 1, correction)
+    assert prepare(workflow, family(2), attempts=1)["plannedStages"] == 2
+    with pytest.raises(ValueError, match="different brief or configuration"):
+        prepare(workflow, family(2), attempts=2)
+
+    stages = workflow.status("test_moth")["jobs"]["test_moth"]["stages"]
+    assert [item["maxAttempts"] for item in stages] == [2, 1]
+    assert stages[0]["retryExtensions"][0]["reason"] == correction
+    assert stages[1]["retryExtensions"] == []
+    pending = workflow.resume("test_moth", 1, rejected_only=True)["requests"][0]
+    assert pending["requestId"] == "test_moth:s01:a2"
+    assert correction in pending["prompt"] and rejected["reason"] in pending["prompt"]
+    assert workflow.request("test_moth", 1, None)["requestId"] == pending["requestId"]
+    assert raw.read_bytes() == original_raw and proof.read_bytes() == original_proof
+
+
+def test_extend_retry_respects_absolute_attempt_limit(workflow):
+    prepare(workflow, attempts=pipeline.MAX_ATTEMPTS - 1)
+    for number in range(1, pipeline.MAX_ATTEMPTS):
+        workflow.request("test_moth", 1, None)
+        workflow.fail("test_moth", 1, number, "Fixture provider failure")
+    workflow.extend_retry("test_moth", 1, "Retry once after the fixture provider recovers.")
+    assert workflow.request("test_moth", 1, None)["attempt"] == pipeline.MAX_ATTEMPTS
+    assert workflow.fail("test_moth", 1, pipeline.MAX_ATTEMPTS, "Fixture provider failure")["status"] == "exhausted"
+    with pytest.raises(ValueError, match="maximum of 10 total attempts"):
+        workflow.extend_retry("test_moth", 1, "Another retry")
+
+
 def test_fixture_review_retry_owner_approval_and_export_are_hash_bound(workflow):
     prepare(workflow, family(2))
     with pytest.raises(ValueError, match="previous stage"):

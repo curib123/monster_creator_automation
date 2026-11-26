@@ -108,6 +108,13 @@ backgrounds. All visual checks must pass, the weighted score must be at least
 9/10, and every rubric dimension must score at least 8/10. The tool keeps rejected
 attempts for audit and queues stages with remaining attempts.
 
+When a stage exhausts its retries and there is a specific correction to try,
+use `extend-retry --job ID --stage N --reason TEXT` in the same workspace. It
+records one additional attempt for that stage, up to 10 total. Review history,
+the original family brief, and the limits on sibling stages stay intact. Write
+the intended correction in the reason. The next prompt carries that direction
+and the previous rejection feedback. Reserve it with the regular `request` command.
+
 After the owner explicitly approves the candidate artwork, record the decision
 with `approve --job ID --owner NAME --authorization TEXT` and run
 `export --job ID`. The portable package preserves sprite hashes, pivot,

@@ -17,6 +17,9 @@ from .qa import PROCESSING_VERSION, RUBRIC, VISUAL_CHECKS, comparison, normalize
 from .style import PROMPT_VERSION, compile_prompt, verify_master
 
 
+MAX_ATTEMPTS = 10
+
+
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -94,8 +97,12 @@ def phase(job: dict, stage: int) -> str:
     if attempt is None:
         return "pending"
     if attempt["status"] in ("rejected", "provider_failed"):
-        return "exhausted" if attempt["number"] >= job["maxAttempts"] else "pending"
+        return "exhausted" if attempt["number"] >= attempt_limit(job, stage) else "pending"
     return attempt["status"]
+
+
+def attempt_limit(job: dict, stage: int) -> int:
+    return job["maxAttempts"] + len(job.get("retryExtensions", {}).get(str(stage), ()))
 
 
 class Workflow:
@@ -130,8 +137,8 @@ class Workflow:
                     connection.execute("INSERT OR REPLACE INTO jobs VALUES (?, ?)", (key, record))
 
     def prepare(self, source: Path, max_attempts: int, size: int) -> dict:
-        if not 1 <= max_attempts <= 10 or size not in (512, 1024, 2048):
-            raise ValueError("Prepare requires 1–10 attempts and a 512, 1024, or 2048 pixel canvas")
+        if not 1 <= max_attempts <= MAX_ATTEMPTS or size not in (512, 1024, 2048):
+            raise ValueError(f"Prepare requires 1–{MAX_ATTEMPTS} attempts and a 512, 1024, or 2048 pixel canvas")
         plans = read_json(source)
         plans = plans.get("families", [plans]) if isinstance(plans, dict) else plans
         if not isinstance(plans, list) or not plans:
@@ -202,7 +209,11 @@ class Workflow:
                 verified_bytes(path, digest)
                 family_reference = {"path": str(path), "sha256": digest}
                 break
-        prompt = compile_prompt(job["brief"], stage, previous.get("reason") if previous else None)
+        feedback = previous.get("reason") if previous else None
+        extensions = job.get("retryExtensions", {}).get(str(stage), ())
+        if extensions and extensions[-1]["maxAttempts"] == attempt:
+            feedback = f"{feedback}\n\nCorrection for this additional attempt: {extensions[-1]['reason']}"
+        prompt = compile_prompt(job["brief"], stage, feedback)
         return {"job": job_id, "stage": stage, "attempt": attempt,
                 "requestId": f"{job_id}:s{stage:02d}:a{attempt}", "prompt": prompt, "promptVersion": job["promptVersion"],
                 "reference": str(self.repo / master["reference_path"]) if master else None,
@@ -291,6 +302,20 @@ class Workflow:
                 raise ValueError("Only an in-flight generation request can fail")
             target.update(status="provider_failed", reason=reason, finished=stamp())
             return {"stage": stage, "status": phase(job, stage), "reason": reason}
+
+    def extend_retry(self, job_id: str, stage: int, reason: str) -> dict:
+        require_text({"reason": reason}, ("reason",))
+        with self.checkpoint() as jobs:
+            job = self.selected(jobs, job_id)[job_id]
+            if phase(job, stage) != "exhausted":
+                raise ValueError("Only an exhausted stage can receive a retry extension")
+            previous_limit = attempt_limit(job, stage)
+            if previous_limit >= MAX_ATTEMPTS:
+                raise ValueError(f"Stage {stage} reached the maximum of {MAX_ATTEMPTS} total attempts")
+            extension = {"previousLimit": previous_limit, "maxAttempts": previous_limit + 1,
+                         "reason": reason.strip(), "extendedAt": stamp()}
+            job.setdefault("retryExtensions", {}).setdefault(str(stage), []).append(extension)
+            return {"job": job_id, "stage": stage, "status": phase(job, stage), **extension}
 
     def ingest(self, job_id: str, stage: int, number: int, source: Path, receipt_path: Path) -> dict:
         if source.stat().st_size > 80 * 1024 * 1024:
@@ -447,6 +472,8 @@ class Workflow:
                     if validate and "technical" in record:
                         verified_bytes(self.artifact(key, stage, record["number"], "sprite.png"), record["technical"]["sha256"])
                     stages.append({"stage": stage, "status": status, "attempts": record.get("number", 0),
+                                   "maxAttempts": attempt_limit(job, stage),
+                                   "retryExtensions": job.get("retryExtensions", {}).get(str(stage), []),
                                    "reason": record.get("reason"), "score": record.get("visual", {}).get("score"),
                                    "exports": record.get("exports", []), "generated": generated})
                 families[key] = {"worldId": world, "monsterType": category, "stages": stages}
