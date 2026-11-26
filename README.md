@@ -24,3 +24,5 @@ See [PLAN.md](PLAN.md) for architecture, element examples, proposed CLI, quality
 After implementation, request a family by element and species, e.g. "Create a water axolotl family, three stages, using the locked master reference." Review the result before exporting. The system must not change approved assets silently or claim guaranteed legal clearance.
 
 Official references: https://developers.openai.com/api/docs/guides/image-generation and https://developers.openai.com/learn/codex.
+
+**25-world integration:** Support 24 campaign worlds and one endless convergence world. Read the authoritative local game catalog and element registry, preserve distinct element IDs and asset keys, support hybrids and report coverage for every world. See PLAN.md. Never hard-code a one-world-per-element assumption.
