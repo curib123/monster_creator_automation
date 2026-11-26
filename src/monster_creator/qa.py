@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 
 
 PIVOT = (0.5, 0.06)
-PROCESSING_VERSION = 2
+PROCESSING_VERSION = 3
 ALPHA_NOISE_MAX = 8  # Matches the existing Aevareth monster sprite extraction policy.
 RUBRIC = {
     "styleFidelity": 25,
@@ -33,7 +33,8 @@ def normalize(source: bytes, size: int, stage: int, count: int, floating: bool) 
         if min(image.size) < 256 or max(image.size) > 4096:
             raise ValueError("Source dimensions must be between 256 and 4096 pixels")
         alpha = image.getchannel("A")
-        if alpha.getextrema() != (0, 255):
+        minimum, maximum = alpha.getextrema()
+        if minimum != 0 or maximum < 250:
             raise ValueError("PNG must have fully transparent pixels and a solid subject")
         alpha = alpha.point(lambda value: 0 if value <= ALPHA_NOISE_MAX else value)
         image.putalpha(alpha)

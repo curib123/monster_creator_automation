@@ -194,7 +194,7 @@ def test_alpha_noise_recheck_retains_source_and_rejection_while_real_clip_fails(
         with pytest.raises(ValueError, match="already used"):
             workflow.reprocess("test_moth", 1, 1)
     checked = workflow.reprocess("test_moth", 1, 1)
-    assert checked["processingVersion"] == 2 and checked["status"] == "technical_pass"
+    assert checked["processingVersion"] == pipeline.PROCESSING_VERSION and checked["status"] == "technical_pass"
     assert checked["technicalHistory"][0]["reason"] == rejected["reason"]
     assert checked["handoff"]["requestId"] == request["requestId"]
     assert workflow.artifact("test_moth", 1, 1, "raw.png").read_bytes() == original
@@ -207,3 +207,14 @@ def test_alpha_noise_recheck_retains_source_and_rejection_while_real_clip_fails(
         image.save(source)
     clipped = workflow.ingest("test_clipped", 1, 1, source, receipt)
     assert clipped["status"] == "rejected" and "touches the edge" in clipped["reason"]
+
+
+def test_almost_opaque_subject_keeps_its_alpha_without_admitting_ghosts(workflow):
+    prepare(workflow, [family(), family(family_id="test_ghost")])
+    for job, opacity, expected in (("test_moth", 254, "technical_pass"), ("test_ghost", 249, "rejected")):
+        request = workflow.request(job, 1, None)
+        source, receipt = provider_result(workflow, request, (50, 150, 220, opacity))
+        candidate = workflow.ingest(job, 1, 1, source, receipt)
+        assert candidate["status"] == expected
+    with Image.open(workflow.artifact("test_moth", 1, 1, "sprite.png")) as sprite:
+        assert sprite.getchannel("A").getextrema() == (0, 254)
